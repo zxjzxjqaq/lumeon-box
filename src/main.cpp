@@ -147,10 +147,13 @@ static int Run(HINSTANCE hInst) {
     if (mode == DesktopMode::DesktopLayer && !AttachToDesktopLayer(win.hwnd())) {
         UseBottomMode(win.hwnd());
         mode = DesktopMode::Bottom;
-        cfg.mode = "bottom";
     } else if (mode == DesktopMode::Bottom) {
         UseBottomMode(win.hwnd());
     }
+    // 同步实际启动模式，退出时持久化的是真实状态（热键切换路径自行更新）
+    cfg.mode = mode == DesktopMode::DesktopLayer ? "desktop"
+             : mode == DesktopMode::Bottom       ? "bottom"
+                                                 : "independent";
     StageTrace("3:mode-restored");
 
     MSG m;

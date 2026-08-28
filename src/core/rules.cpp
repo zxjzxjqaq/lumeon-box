@@ -58,7 +58,7 @@ RuleSet::RuleSet() {
                           L"ape"});
     add(Category::Archive, {L"zip", L"rar", L"7z", L"tar", L"gz", L"bz2", L"xz",
                             L"iso"});
-    add(Category::Installer, {L"exe", L"msi", L"msix", L"appx", L"msp"});
+    add(Category::Installer, {L"exe", L"msi", L"msix", L"appx", L"msp", L"apk"});
 }
 
 Category RuleSet::Match(std::wstring_view extLower) const {

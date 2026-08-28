@@ -100,6 +100,39 @@ TEST_CASE("拖拽归位与原位被占的撤销", "[organizer]") {
     REQUIRE(fs::exists(d.dir / L"x (2).txt"));
 }
 
+TEST_CASE("放回桌面：从格子移回桌面根，冲突唯一名，可撤销", "[organizer]") {
+    Desk d;
+    Journal jr(d.jrPath.wstring());
+    RuleSet rules;
+    Organizer org(d.dir.wstring(), rules, jr);
+
+    std::ofstream(d.dir / L"y.pdf") << 'x';
+    org.OrganizeAll();
+    fs::path inbox = d.dir / L"LumenBox" / L"文档" / L"y.pdf";
+    REQUIRE(fs::exists(inbox));
+
+    REQUIRE(org.MoveBackToDesktop(inbox.wstring()));
+    REQUIRE(fs::exists(d.dir / L"y.pdf"));
+    REQUIRE_FALSE(fs::exists(inbox));
+
+    // 再放回一次且桌面已有同名 → 唯一名，永不覆盖
+    std::ofstream(d.dir / L"y.pdf") << "again";
+    REQUIRE_FALSE(fs::exists(d.dir / L"LumenBox" / L"文档" / L"y.pdf"));
+    std::ofstream(d.dir / L"LumenBox" / L"文档" / L"y.pdf") << 'x';
+    REQUIRE(org.MoveBackToDesktop((d.dir / L"LumenBox" / L"文档" / L"y.pdf").wstring()));
+    REQUIRE(fs::exists(d.dir / L"y (2).pdf"));
+
+    // 放回动作在日志里成批，可撤销
+    REQUIRE(org.UndoLast());
+    REQUIRE(fs::exists(d.dir / L"LumenBox" / L"文档" / L"y.pdf"));
+    REQUIRE_FALSE(fs::exists(d.dir / L"y (2).pdf"));
+
+    // 非格子内文件拒绝放回
+    std::ofstream(d.dir / L"z.txt") << 'x';
+    REQUIRE_FALSE(org.MoveBackToDesktop((d.dir / L"z.txt").wstring()));
+    REQUIRE_FALSE(org.MoveBackToDesktop(L"C:\\不存在的路径\\a.pdf"));
+}
+
 TEST_CASE("隐藏文件不整理", "[organizer]") {
     Desk d;
     Journal jr(d.jrPath.wstring());

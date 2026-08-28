@@ -20,6 +20,7 @@ public:
 
     Summary OrganizeAll();                                    // 一键整理
     bool MoveToCategory(const std::wstring& path, Category c); // 拖拽归位
+    bool MoveBackToDesktop(const std::wstring& path);          // 格子文件放回桌面根
     std::vector<std::wstring> FilesIn(Category c) const;       // 格子内容（绝对路径）
     bool UndoLast();                                           // 撤销最后一个批次
 

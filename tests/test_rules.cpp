@@ -15,6 +15,8 @@ TEST_CASE("默认规则表", "[rules]") {
     REQUIRE(rs.Match(L"mp3") == Category::Audio);
     REQUIRE(rs.Match(L"zip") == Category::Archive);
     REQUIRE(rs.Match(L"exe") == Category::Installer);
+    REQUIRE(rs.Match(L"apk") == Category::Installer);   // 桌面上的 apk 属安装包
+    REQUIRE(rs.Match(L"appx") == Category::Installer);
     REQUIRE(rs.Match(L"xyz123") == Category::None);
 }
 

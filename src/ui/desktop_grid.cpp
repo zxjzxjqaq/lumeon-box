@@ -81,21 +81,32 @@ void DesktopGrid::RedrawBox(int i) {
     auto surface = gfx_->DrawToSurface(w, h, dpi_, [&](::ID2D1DeviceContext* ctx, float) {
         ctx->Clear(nullptr);
 
+        // 贴桌模式下窗口是 WorkerW 子窗口，DWM 模糊不可用（仅顶层窗口生效），
+        // 玻璃感由自绘深色卡面承担：#0B0E14 系，悬停微亮（Aurora Glass 规范）
+        auto base = D2D1_COLOR_F{0.043f, 0.055f, 0.078f, b.hovered ? 0.74f : 0.62f};
         ComPtr<::ID2D1SolidColorBrush> fill;
-        ctx->CreateSolidColorBrush(
-            D2D1_COLOR_F{1.f, 1.f, 1.f, b.hovered ? 0.09f : 0.05f}, fill.GetAddressOf());
+        ctx->CreateSolidColorBrush(base, fill.GetAddressOf());
         ComPtr<::ID2D1SolidColorBrush> line;
         ctx->CreateSolidColorBrush(
-            D2D1_COLOR_F{1.f, 1.f, 1.f, b.hovered ? 0.20f : 0.11f}, line.GetAddressOf());
+            D2D1_COLOR_F{1.f, 1.f, 1.f, b.hovered ? 0.22f : 0.14f}, line.GetAddressOf());
         ComPtr<::ID2D1SolidColorBrush> text;
-        ctx->CreateSolidColorBrush(D2D1_COLOR_F{1.f, 1.f, 1.f, 0.88f}, text.GetAddressOf());
+        ctx->CreateSolidColorBrush(D2D1_COLOR_F{1.f, 1.f, 1.f, 0.92f}, text.GetAddressOf());
         ComPtr<::ID2D1SolidColorBrush> dim;
         ctx->CreateSolidColorBrush(D2D1_COLOR_F{1.f, 1.f, 1.f, 0.55f}, dim.GetAddressOf());
 
         const D2D1_ROUNDED_RECT rr{{0.5f, 0.5f, w - 0.5f, h - 0.5f}, 12.f, 12.f};
         ctx->FillRoundedRectangle(rr, fill.Get());
 
-        // 悬停/常驻描边：悬停走极光渐变
+        // 头栏：类名 + 计数
+        std::wstring title = CategoryName(b.cat);
+        ctx->DrawText(title.c_str(), (UINT32)title.size(), headerFmt_.Get(),
+                      {12.f, 6.f, w - 40.f, kHeaderH}, text.Get());
+        std::wstring count = std::to_wstring(b.files.size());
+        ctx->DrawText(count.c_str(), (UINT32)count.size(), headerFmt_.Get(),
+                      {w - 34.f, 6.f, w - 10.f, kHeaderH}, dim.Get());
+        ctx->DrawLine({10.f, kHeaderH}, {w - 10.f, kHeaderH}, line.Get(), 0.8f);
+
+        // 行：图标 + 文件名（悬停行走极光渐变描边整卡）
         if (b.hovered) {
             D2D1_GRADIENT_STOP gs[3] = {
                 {0.0f, D2D1_COLOR_F{0.133f, 0.827f, 0.933f, 0.9f}},
@@ -115,23 +126,17 @@ void DesktopGrid::RedrawBox(int i) {
             ctx->DrawRoundedRectangle(rr, line.Get(), 1.f);
         }
 
-        // 头栏：类名 + 计数
-        std::wstring title = CategoryName(b.cat);
-        ctx->DrawText(title.c_str(), (UINT32)title.size(), headerFmt_.Get(),
-                      {12.f, 6.f, w - 40.f, kHeaderH}, text.Get());
-        std::wstring count = std::to_wstring(b.files.size());
-        ctx->DrawText(count.c_str(), (UINT32)count.size(), headerFmt_.Get(),
-                      {w - 34.f, 6.f, w - 10.f, kHeaderH}, dim.Get());
-        ctx->DrawLine({10.f, kHeaderH}, {w - 10.f, kHeaderH}, line.Get(), 0.8f);
-
-        // 行
         if (!b.collapsed) {
             size_t rows = std::min<size_t>(b.files.size(), kMaxRows);
             for (size_t r = 0; r < rows; ++r) {
-                std::wstring name = Ellipsize(fs::path(b.files[r]).filename().wstring(), 22);
+                std::wstring name = Ellipsize(fs::path(b.files[r]).filename().wstring(), 19);
                 float y = kHeaderH + kPad * 0.4f + static_cast<float>(r) * kRowH;
+                if (auto* icon = icons_.Get(ctx, b.files[r])) {
+                    ctx->DrawBitmap(icon, D2D1::RectF(14.f, y + 3.f, 30.f, y + 19.f), 1.f,
+                                    D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC);
+                }
                 ctx->DrawText(name.c_str(), (UINT32)name.size(), rowFmt_.Get(),
-                              {14.f, y, w - 12.f, y + kRowH + 3.f}, text.Get());
+                              {36.f, y, w - 12.f, y + kRowH + 3.f}, text.Get());
             }
             if (b.files.size() > kMaxRows) {
                 std::wstring more = L"+ " + std::to_wstring(b.files.size() - kMaxRows) + L" 更多";
@@ -180,11 +185,37 @@ void DesktopGrid::OpenFile(const std::wstring& path) const {
     ShellExecuteW(nullptr, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 }
 
+void DesktopGrid::RowMenu(HWND hwnd, const std::wstring& path) {
+    HMENU m = CreatePopupMenu();
+    AppendMenuW(m, MF_STRING, 1, L"打开");
+    AppendMenuW(m, MF_STRING, 2, L"打开位置");
+    AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(m, MF_STRING, 3, L"放回桌面");
+    POINT pt;
+    GetCursorPos(&pt);
+    SetForegroundWindow(hwnd);  // TrackPopupMenu 需要前台窗口才能正常收起
+    int cmd = TrackPopupMenu(m, TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
+                             pt.x, pt.y, 0, hwnd, nullptr);
+    DestroyMenu(m);
+    switch (cmd) {
+    case 1: OpenFile(path); break;
+    case 2:
+        ShellExecuteW(nullptr, L"open", L"explorer.exe",
+                      (L"/select,\"" + path + L"\"").c_str(), nullptr, SW_SHOWNORMAL);
+        break;
+    case 3:
+        if (org_ && org_->MoveBackToDesktop(path)) Refresh();
+        break;
+    }
+}
+
 void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
     hwnd_ = hwnd;
     int b = BoxAt(x, y);
     switch (msg) {
-    case WM_MOUSEMOVE:
+    case WM_MOUSEMOVE: {
+        int row = b >= 0 ? RowIndexAt(boxes_[b], x, y) : -1;
+        SetCursor(LoadCursorW(nullptr, row >= 0 ? IDC_HAND : IDC_ARROW));
         if (b != hovered_) {
             int old = hovered_;
             hovered_ = b;
@@ -192,6 +223,7 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
             if (b >= 0) RedrawBox(b);
         }
         break;
+    }
     case WM_LBUTTONUP: {
         if (b >= 0 && RowIndexAt(boxes_[b], x, y) == -2) {  // 头栏点击 = 折叠
             boxes_[b].collapsed = !boxes_[b].collapsed;
@@ -204,6 +236,13 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
         if (b >= 0) {
             int row = RowIndexAt(boxes_[b], x, y);
             if (row >= 0) OpenFile(boxes_[b].files[row]);
+        }
+        break;
+    }
+    case WM_RBUTTONUP: {
+        if (b >= 0) {
+            int row = RowIndexAt(boxes_[b], x, y);
+            if (row >= 0) RowMenu(hwnd, boxes_[b].files[row]);
         }
         break;
     }

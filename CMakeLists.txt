@@ -38,6 +38,7 @@ add_executable(lumenbox WIN32
   src/ui/glass_window.cpp
   src/ui/card_visual.cpp
   src/ui/desktop_grid.cpp
+  src/ui/icons.cpp
   src/ui/tray.cpp
   src/shell/desktop_layer.cpp
   src/anim/spring_demo.cpp)

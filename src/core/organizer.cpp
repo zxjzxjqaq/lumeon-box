@@ -78,6 +78,22 @@ bool Organizer::MoveToCategory(const std::wstring& path, Category c) {
     return MoveOne(path, c);
 }
 
+bool Organizer::MoveBackToDesktop(const std::wstring& path) {
+    std::error_code ec;
+    fs::path p(path);
+    if (!fs::exists(p, ec) || fs::is_directory(p, ec)) return false;
+    // 只接受 <desktop>\LumenBox\<类目>\ 内的文件，防止把任意路径当「放回」用
+    std::wstring root = (fs::path(desktop_) / L"LumenBox").wstring();
+    std::wstring parent = p.parent_path().wstring();
+    if (_wcsicmp(parent.substr(0, root.size()).c_str(), root.c_str()) != 0) return false;
+    if (parent.size() <= root.size() + 1) return false;  // LumenBox 根下不放文件
+    jr_.BeginBatch();
+    std::wstring dst = UniqueTarget((fs::path(desktop_) / p.filename()).wstring());
+    if (!MoveFileExW(p.c_str(), dst.c_str(), MOVEFILE_COPY_ALLOWED)) return false;
+    jr_.LogMove({p.wstring(), dst});
+    return true;
+}
+
 std::vector<std::wstring> Organizer::FilesIn(Category c) const {
     std::vector<std::wstring> out;
     std::error_code ec;

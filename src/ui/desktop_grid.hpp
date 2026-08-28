@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include "ui/d2d_interop.hpp"
+#include "ui/icons.hpp"
 #include "core/organizer.hpp"
 
 namespace lb {
@@ -45,11 +46,13 @@ private:
     void RedrawBox(int i);
     int RowIndexAt(const Box& b, float x, float y) const;   // -1=无  -2=头栏
     void OpenFile(const std::wstring& path) const;
+    void RowMenu(HWND hwnd, const std::wstring& path);      // 行右键：打开/位置/放回
 
     GraphicsContext* gfx_ = nullptr;
     ComPtr<IDCompositionVisual> root_;
     ComPtr<IDWriteFactory> dwrite_;
     ComPtr<IDWriteTextFormat> headerFmt_, rowFmt_;
+    IconCache icons_;
     float dpi_ = 96.f;
     std::vector<Box> boxes_;
     int hovered_ = -1;
