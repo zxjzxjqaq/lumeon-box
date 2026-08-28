@@ -1,70 +1,149 @@
-#include "anim/spring_demo.hpp"
+#include <windows.h>
+#include <filesystem>
+#include <knownfolders.h>
+#include <shlobj.h>
+#include "anim/spring_demo.hpp"  // M0 演示保留编译；主流程不再使用
 #include "core/config.hpp"
+#include "core/organizer.hpp"
+#include "core/rules.hpp"
 #include "core/stage_log.hpp"
 #include "shell/desktop_layer.hpp"
-#include "ui/card_visual.hpp"
-#include "ui/d2d_interop.hpp"
+#include "ui/desktop_grid.hpp"
 #include "ui/glass_window.hpp"
+#include "ui/tray.hpp"
 
 using namespace lb;
+namespace fs = std::filesystem;
 
-static int RunSpike(HINSTANCE hInst) {
-    StageTrace("0:enter-runspike");
+static std::wstring KnownPath(REFKNOWNFOLDERID id) {
+    PWSTR raw = nullptr;
+    if (FAILED(SHGetKnownFolderPath(id, 0, nullptr, &raw))) return L".";
+    std::wstring p(raw);
+    CoTaskMemFree(raw);
+    return p;
+}
 
-    ConfigStore store(ConfigStore::default_dir() / L"spike.json");
+static int Run(HINSTANCE hInst) {
+    StageTrace("0:enter-run");
+
+    const std::wstring appData = ConfigStore::default_dir().wstring();
+    const std::wstring cfgPath = appData + L"\\config.json";
+    const bool fresh = !fs::exists(cfgPath);
+
+    ConfigStore store(cfgPath);
     SpikeConfig cfg = store.load();
 
+    RuleSet rules = RuleSet::Load(appData + L"\\rules.json");
+    Journal jr(appData + L"\\journal.jsonl");
+    Organizer org(KnownPath(FOLDERID_Desktop), rules, jr);
+
     GlassWindow win;
-    SpringDemo demo;
-    DesktopMode mode = cfg.mode == "desktop" ? DesktopMode::DesktopLayer
-                     : cfg.mode == "bottom"  ? DesktopMode::Bottom
-                                             : DesktopMode::Independent;
+    DesktopGrid grid;
+    TrayIcon tray;
+    bool visible = true;
+
+    DesktopMode mode = cfg.mode == "bottom"    ? DesktopMode::Bottom
+                     : cfg.mode == "independent" && !fresh ? DesktopMode::Independent
+                                                           : DesktopMode::DesktopLayer;
+
+    auto doOrganize = [&] {
+        org.OrganizeAll();
+        grid.Refresh();
+        grid.AnimateIn(win.hwnd());
+    };
+    auto doUndo = [&] {
+        org.UndoLast();
+        grid.Refresh();
+    };
+    auto toggleVisible = [&] {
+        visible = !visible;
+        ShowWindow(win.hwnd(), visible ? SW_SHOW : SW_HIDE);
+    };
 
     auto on_key = [&](UINT id) {
-        if (id == 1) {  // F9：独立 → 贴桌(失败转置底) → 独立
-            StageTrace("k:f9-press");
+        if (id == 1) {  // Ctrl+Alt+1：贴桌 ↔ 独立（失败转置底）
+            StageTrace("k:ca1");
             if (mode == DesktopMode::Independent) {
                 if (AttachToDesktopLayer(win.hwnd())) {
-                    StageTrace("k:attach-ok");
                     mode = DesktopMode::DesktopLayer;
                 } else {
-                    StageTrace("k:attach-fail -> bottom");
                     UseBottomMode(win.hwnd());
                     mode = DesktopMode::Bottom;
                 }
             } else if (RestoreIndependent(win.hwnd())) {
-                StageTrace("k:restore-ok");
                 mode = DesktopMode::Independent;
             }
             cfg.mode = mode == DesktopMode::DesktopLayer ? "desktop"
                      : mode == DesktopMode::Bottom       ? "bottom"
                                                          : "independent";
-        } else if (id == 2) {  // F10：弹簧动画
-            demo.Trigger(win.hwnd());
+        } else if (id == 2) {  // Ctrl+Alt+2：一键整理
+            StageTrace("k:ca2-organize");
+            doOrganize();
         }
     };
 
-    if (!win.Create(hInst, L"LumenBox Spike", cfg, on_key)) return 1;
+    if (!win.Create(hInst, L"LumenBox", cfg, on_key)) return 1;
     StageTrace("1:window-created");
-    // spike 用 Ctrl+Alt+1/2：F 键常被输入法/工具占用（F9 在本机注册即失败）
     if (!RegisterHotKey(win.hwnd(), 1, MOD_CONTROL | MOD_ALT, '1'))
         StageTrace("hotkey-CA1-register-FAILED");
     if (!RegisterHotKey(win.hwnd(), 2, MOD_CONTROL | MOD_ALT, '2'))
         StageTrace("hotkey-CA2-register-FAILED");
-    win.OnTimer([&](HWND h, UINT id) { demo.OnTimer(h, id); });
+    win.OnTimer([&](HWND h, UINT id) { grid.OnTimer(h, id); });
+    win.OnMouse([&](UINT msg, float x, float y) { grid.OnMouse(win.hwnd(), msg, x, y); });
+    win.OnHitTest([&](float x, float y) {
+        return grid.BoxAt(x, y) >= 0 ? HTCLIENT : HTTRANSPARENT;  // 空白区点击穿透
+    });
 
-    ComPtr<IDCompositionVisual> card;
-    if (!CreateCardVisual(win.gfx(), card, static_cast<float>(cfg.w),
-                          static_cast<float>(cfg.h), win.DpiScale()))
-        return 1;
-    win.Root()->AddVisual(card.Get(), TRUE, nullptr);
-    StageTrace("3:card-visual");
+    grid.SetOrg(&org);
+    grid.Init(win.gfx(), win.Root(), win.DpiScale());
+    grid.SetOnExtent([&](float w, float h) {
+        RECT work{};
+        SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
+        const int margin = 24;
+        int wd = static_cast<int>(w * win.DpiScale()) + 2;
+        int ht = static_cast<int>(h * win.DpiScale()) + 2;
+        SetWindowPos(win.hwnd(), nullptr, work.right - wd - margin,
+                     work.bottom - ht - margin, wd, ht,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+        StageTrace("l:extent-applied");
+    });
+    grid.Refresh();
+    StageTrace("2:grid-ready");
 
-    if (!demo.Init(win.gfx(), static_cast<float>(cfg.w), static_cast<float>(cfg.h)))
-        return 1;
-    StageTrace("4:spring-init");
+    if (!tray.Add(win.hwnd(), WM_APP + 1, LoadIconW(nullptr, IDI_APPLICATION),
+                  L"LumenBox 桌面整理"))
+        StageTrace("tray-add-FAILED");
 
-    // 恢复上次模式
+    win.OnApp([&](UINT msg, WPARAM wp, LPARAM lp) -> LRESULT {
+        if (msg == WM_APP + 1) {
+            if (LOWORD(lp) == WM_RBUTTONUP) {
+                SetForegroundWindow(win.hwnd());
+                HMENU m = CreatePopupMenu();
+                AppendMenuW(m, MF_STRING, 1, L"一键整理");
+                AppendMenuW(m, MF_STRING, 2, L"撤销上次整理");
+                AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+                AppendMenuW(m, MF_STRING, 3, L"显示 / 隐藏");
+                AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+                AppendMenuW(m, MF_STRING, 9, L"退出");
+                POINT pt;
+                GetCursorPos(&pt);
+                int cmd = TrackPopupMenu(m, TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
+                                         pt.x, pt.y, 0, win.hwnd(), nullptr);
+                DestroyMenu(m);
+                switch (cmd) {
+                case 1: doOrganize(); break;
+                case 2: doUndo(); break;
+                case 3: toggleVisible(); break;
+                case 9: DestroyWindow(win.hwnd()); break;
+                }
+            } else if (LOWORD(lp) == WM_LBUTTONDBLCLK) {
+                toggleVisible();
+            }
+        }
+        return 0;
+    });
+
+    // 启动挂靠：默认贴桌（v0.4 D2 决策），失败转置底
     if (mode == DesktopMode::DesktopLayer && !AttachToDesktopLayer(win.hwnd())) {
         UseBottomMode(win.hwnd());
         mode = DesktopMode::Bottom;
@@ -72,7 +151,7 @@ static int RunSpike(HINSTANCE hInst) {
     } else if (mode == DesktopMode::Bottom) {
         UseBottomMode(win.hwnd());
     }
-    StageTrace("5:mode-restored");
+    StageTrace("3:mode-restored");
 
     MSG m;
     while (GetMessageW(&m, nullptr, 0, 0) > 0) {
@@ -80,7 +159,8 @@ static int RunSpike(HINSTANCE hInst) {
         DispatchMessageW(&m);
     }
     StageTrace("6:loop-exited");
-    store.save(cfg);  // 位置/尺寸/模式持久化
+    store.save(cfg);
+    tray.Remove();
     return 0;
 }
 
@@ -91,11 +171,11 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
     int exit_code = 0;
     std::string err;
     try {
-        exit_code = RunSpike(hInst);
+        exit_code = Run(hInst);
     } catch (std::exception const& e) {
         exit_code = 2;
         err = e.what();
     }
-    if (!err.empty()) MessageBoxA(nullptr, err.c_str(), "LumenBox Spike 异常", MB_ICONERROR);
+    if (!err.empty()) MessageBoxA(nullptr, err.c_str(), "LumenBox 异常", MB_ICONERROR);
     return exit_code;
 }

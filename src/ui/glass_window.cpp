@@ -2,6 +2,7 @@
 #include "core/config.hpp"
 #include "core/stage_log.hpp"
 #include <dwmapi.h>
+#include <windowsx.h>
 #pragma comment(lib, "dwmapi")
 
 #ifndef DWMWA_SYSTEMBACKDROP_TYPE
@@ -86,7 +87,23 @@ LRESULT GlassWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             reinterpret_cast<LONG_PTR>(
                 reinterpret_cast<CREATESTRUCTW*>(lp)->lpCreateParams));
         return DefWindowProcW(hwnd, msg, wp, lp);
-    case WM_NCHITTEST: return HTCAPTION;  // spike：整窗可拖
+    case WM_NCHITTEST:
+        if (self && self->on_hittest_) {
+            POINT pt{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+            ScreenToClient(hwnd, &pt);
+            return self->on_hittest_(pt.x / self->dpi_ * 96.f, pt.y / self->dpi_ * 96.f);
+        }
+        return HTCAPTION;
+    case WM_MOUSEMOVE:
+    case WM_LBUTTONDOWN:
+    case WM_LBUTTONUP:
+    case WM_LBUTTONDBLCLK:
+    case WM_RBUTTONUP:
+        if (self && self->on_mouse_) {
+            self->on_mouse_(msg, static_cast<short>(LOWORD(lp)) / self->dpi_ * 96.f,
+                            static_cast<short>(HIWORD(lp)) / self->dpi_ * 96.f);
+        }
+        return 0;
     case WM_KEYDOWN:
         if (wp == VK_ESCAPE) DestroyWindow(hwnd);
         return 0;
@@ -101,6 +118,8 @@ LRESULT GlassWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         PostQuitMessage(0);
         return 0;
     }
+    if (msg >= WM_APP && msg <= 0xBFFF && self && self->on_app_)
+        return self->on_app_(msg, wp, lp);
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
 

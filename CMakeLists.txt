@@ -37,6 +37,8 @@ add_executable(lumenbox WIN32
   src/core/organizer.cpp
   src/ui/glass_window.cpp
   src/ui/card_visual.cpp
+  src/ui/desktop_grid.cpp
+  src/ui/tray.cpp
   src/shell/desktop_layer.cpp
   src/anim/spring_demo.cpp)
 target_include_directories(lumenbox PRIVATE src)
