@@ -14,7 +14,10 @@ FetchContent_Declare(catch2
 FetchContent_MakeAvailable(json catch2)
 
 enable_testing()
-add_executable(core_tests tests/sanity.cpp tests/test_config.cpp src/core/config.cpp)
+add_executable(core_tests tests/sanity.cpp tests/test_config.cpp tests/test_rules.cpp
+  tests/test_classifier.cpp tests/test_journal.cpp tests/test_organizer.cpp
+  src/core/config.cpp src/core/rules.cpp src/core/classifier.cpp
+  src/core/journal.cpp src/core/organizer.cpp)
 target_include_directories(core_tests PRIVATE src)
 target_link_libraries(core_tests PRIVATE Catch2::Catch2WithMain shell32 ole32 nlohmann_json::nlohmann_json)
 target_compile_definitions(core_tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
@@ -27,11 +30,15 @@ add_test(NAME core COMMAND core_tests)
 
 add_executable(lumenbox WIN32
   src/main.cpp
+  src/core/config.cpp
+  src/core/rules.cpp
+  src/core/classifier.cpp
+  src/core/journal.cpp
+  src/core/organizer.cpp
   src/ui/glass_window.cpp
   src/ui/card_visual.cpp
   src/shell/desktop_layer.cpp
-  src/anim/spring_demo.cpp
-  src/core/config.cpp)
+  src/anim/spring_demo.cpp)
 target_include_directories(lumenbox PRIVATE src)
 target_link_libraries(lumenbox PRIVATE d2d1 dwrite dcomp dwmapi shell32 ole32 windowsapp nlohmann_json::nlohmann_json)
 target_compile_definitions(lumenbox PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
