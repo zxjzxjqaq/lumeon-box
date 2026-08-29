@@ -99,6 +99,7 @@ bool NoteWindow::Create() {
 }
 
 void NoteWindow::DrawCard(int wPx, int hPx) {
+    if (!gfx_.device || !titleFmt_) return;  // 未初始化保护
     float w = wPx / dpi_, h = hPx / dpi_;
     auto surface = gfx_.DrawToSurface(w, h, dpi_, [&](::ID2D1DeviceContext* ctx, float) {
         ctx->Clear(nullptr);
@@ -169,7 +170,9 @@ LRESULT CALLBACK NoteWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         return hit;
     }
     case WM_SIZE:
-        if (self && wp != SIZE_MINIMIZED) {
+        // M0 教训重演：CreateWindowExW/系统菜单「大小」可能早于图形上下文与
+        // 编辑层就绪送达 WM_SIZE，未初始化直接绘制即 AV——全部就绪才绘制
+        if (self && self->gfx_.device && self->edit_ && wp != SIZE_MINIMIZED) {
             self->DrawCard(LOWORD(lp), HIWORD(lp));
             SetWindowPos(self->edit_, nullptr, 12, kTitleH + 8, LOWORD(lp) - 24,
                          HIWORD(lp) - kTitleH - 16, SWP_NOZORDER | SWP_NOACTIVATE);
