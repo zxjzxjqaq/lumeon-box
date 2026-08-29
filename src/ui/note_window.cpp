@@ -1,6 +1,7 @@
 #include "ui/note_window.hpp"
 #include <windowsx.h>
-#include <shellapi.h>
+#include <d2d1_2.h>
+#include <dwrite.h>
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -9,12 +10,14 @@
 #include "ui/glass_window.hpp"
 
 #pragma comment(lib, "user32")
+#pragma comment(lib, "dwrite")
 
 namespace lb {
 namespace json = nlohmann;
 
 namespace {
-constexpr int kTimerSave = 1;  // EN_CHANGE 防抖保存
+constexpr int kTimerSave = 1;   // EN_CHANGE 防抖保存
+constexpr int kTitleH = 26;     // 拖拽条高
 
 std::wstring NoteFile() {
     return ConfigStore::default_dir().wstring() + L"\\notes.json";
@@ -23,7 +26,7 @@ std::wstring NoteFile() {
 
 void NoteWindow::Toggle() {
     if (!created_) {
-        Create();
+        if (!Create()) return;
         created_ = true;
         ShowWindow(hwnd_, SW_SHOW);
         return;
@@ -38,17 +41,16 @@ void NoteWindow::Toggle() {
 
 bool NoteWindow::Visible() const { return created_ && IsWindowVisible(hwnd_); }
 
-void NoteWindow::Create() {
+bool NoteWindow::Create() {
     file_ = NoteFile();
     WNDCLASSW wc{};
     wc.lpfnWndProc = &WndProc;
     wc.hInstance = GetModuleHandleW(nullptr);
-    wc.hCursor = LoadCursorW(nullptr, IDC_IBEAM);
+    wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     wc.lpszClassName = L"LumenBoxNote";
     RegisterClassW(&wc);
 
     int x = CW_USEDEFAULT, y = CW_USEDEFAULT;
-    // 位置与内容记忆
     std::ifstream f(file_, std::ios::binary);
     if (f) {
         try {
@@ -59,40 +61,79 @@ void NoteWindow::Create() {
         }
     }
 
-    hwnd_ = CreateWindowExW(WS_EX_TOOLWINDOW, wc.lpszClassName, L"LumenBox 便签",
-                            WS_POPUP | WS_THICKFRAME | WS_SYSMENU, x, y, 264, 324, nullptr,
-                            nullptr, wc.hInstance, this);
-    ApplyGlassBackdrop(hwnd_);
+    // NOREDIRECTIONBITMAP：内容全由 DComp 呈现（与格子同栈）
+    hwnd_ = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOREDIRECTIONBITMAP, wc.lpszClassName,
+                            L"LumenBox 便签", WS_POPUP | WS_THICKFRAME | WS_SYSMENU, x, y, 264,
+                            324, nullptr, nullptr, wc.hInstance, this);
+    if (!hwnd_) return false;
+    if (!gfx_.InitForWindow(hwnd_)) return false;
+    dpi_ = static_cast<float>(GetDpiForWindow(hwnd_));
 
-    // 顶部拖拽条 + 编辑区
-    HWND drag = CreateWindowExW(0, L"STATIC", L"  便签", WS_CHILD | WS_VISIBLE | SS_LEFT, 0, 0,
-                                264, 22, hwnd_, nullptr, wc.hInstance, nullptr);
-    SendMessageW(drag, WM_SETFONT,
-                 (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    if (FAILED(gfx_.device->CreateVisual(card_.GetAddressOf()))) return false;
+    gfx_.root->AddVisual(card_.Get(), TRUE, nullptr);
+
+    if (FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
+                                   reinterpret_cast<IUnknown**>(dwrite_.GetAddressOf()))))
+        return false;
+    dwrite_->CreateTextFormat(L"Microsoft YaHei UI", nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD,
+                              DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.f,
+                              L"zh-cn", titleFmt_.GetAddressOf());
+
+    // 透明编辑层覆于玻璃卡面（WM_CTLCOLOREDIT 返回空刷透出卡面）
     edit_ = CreateWindowExW(0, L"EDIT", L"",
                             WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE |
                                 ES_AUTOVSCROLL | ES_WANTRETURN,
-                            0, 22, 264, 302, hwnd_, (HMENU)1, wc.hInstance, nullptr);
+                            12, kTitleH + 8, 240, 260, hwnd_, (HMENU)1, wc.hInstance, nullptr);
     SendMessageW(edit_, WM_SETFONT,
                  (WPARAM)CreateFontW(-14, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
                                      OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                                      CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei UI"),
                  TRUE);
 
-    // 载入文本
-    std::ifstream f2(file_, std::ios::binary);
-    if (f2) {
-        try {
-            json::json j = json::json::parse(f2);
-            std::string text = j.value("text", std::string());
-            SetWindowTextW(edit_, ToWide(text).c_str());
-        } catch (...) {
-        }
+    RECT rc{};
+    GetClientRect(hwnd_, &rc);
+    DrawCard(rc.right, rc.bottom);
+
+    Load();
+    return true;
+}
+
+void NoteWindow::DrawCard(int wPx, int hPx) {
+    float w = wPx / dpi_, h = hPx / dpi_;
+    auto surface = gfx_.DrawToSurface(w, h, dpi_, [&](::ID2D1DeviceContext* ctx, float) {
+        ctx->Clear(nullptr);
+        // 与格子同款液态玻璃卡面（Aurora Glass 规范）
+        ComPtr<::ID2D1SolidColorBrush> fill, line, text;
+        ctx->CreateSolidColorBrush(D2D1_COLOR_F{0.043f, 0.055f, 0.078f, 0.74f},
+                                   fill.GetAddressOf());
+        ctx->CreateSolidColorBrush(D2D1_COLOR_F{1.f, 1.f, 1.f, 0.14f}, line.GetAddressOf());
+        ctx->CreateSolidColorBrush(D2D1_COLOR_F{1.f, 1.f, 1.f, 0.55f}, text.GetAddressOf());
+        const D2D1_ROUNDED_RECT rr{{0.5f, 0.5f, w - 0.5f, h - 0.5f}, 12.f, 12.f};
+        ctx->FillRoundedRectangle(rr, fill.Get());
+        ctx->DrawRoundedRectangle(rr, line.Get(), 1.f);
+        std::wstring title = L"便签";
+        ctx->DrawText(title.c_str(), (UINT32)title.size(), titleFmt_.Get(),
+                      D2D1_RECT_F{10.f, 4.f, 120.f, (float)kTitleH}, text.Get());
+    });
+    if (surface) {
+        card_->SetContent(surface.Get());
+        gfx_.device->Commit();
+    }
+}
+
+void NoteWindow::Load() {
+    std::ifstream f(file_, std::ios::binary);
+    if (!f) return;
+    try {
+        json::json j = json::json::parse(f);
+        std::string text = j.value("text", std::string());
+        SetWindowTextW(edit_, ToWide(text).c_str());
+    } catch (...) {
     }
 }
 
 void NoteWindow::Save() {
-    if (file_.empty()) return;
+    if (file_.empty() || !edit_) return;
     int len = GetWindowTextLengthW(edit_);
     std::wstring text(len, L'\0');
     GetWindowTextW(edit_, text.data(), len + 1);
@@ -104,8 +145,7 @@ void NoteWindow::Save() {
                  {"w", r.right - r.left},
                  {"h", r.bottom - r.top}};
     std::error_code ec;
-    std::filesystem::create_directories(
-        std::filesystem::path(file_).parent_path(), ec);
+    std::filesystem::create_directories(std::filesystem::path(file_).parent_path(), ec);
     std::ofstream f(file_, std::ios::binary);
     f << j.dump(2);
     dirty_ = false;
@@ -120,15 +160,21 @@ LRESULT CALLBACK NoteWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
                               reinterpret_cast<CREATESTRUCTW*>(lp)->lpCreateParams));
         return DefWindowProcW(hwnd, msg, wp, lp);
     case WM_NCHITTEST: {
-        // 顶部 22px 拖拽条 + 边缘 resize，其余给编辑框
         LRESULT hit = DefWindowProcW(hwnd, msg, wp, lp);
         if (hit == HTCLIENT) {
             POINT pt{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
             ScreenToClient(hwnd, &pt);
-            if (pt.y < 22) hit = HTCAPTION;
+            if (pt.y < kTitleH) hit = HTCAPTION;  // 顶部拖拽条
         }
         return hit;
     }
+    case WM_SIZE:
+        if (self && wp != SIZE_MINIMIZED) {
+            self->DrawCard(LOWORD(lp), HIWORD(lp));
+            SetWindowPos(self->edit_, nullptr, 12, kTitleH + 8, LOWORD(lp) - 24,
+                         HIWORD(lp) - kTitleH - 16, SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+        return 0;
     case WM_COMMAND:
         if (HIWORD(wp) == EN_CHANGE && self) {  // 防抖自动保存
             self->dirty_ = true;
@@ -143,10 +189,9 @@ LRESULT CALLBACK NoteWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         return 0;
     case WM_CTLCOLOREDIT: {
         HDC hdc = (HDC)wp;
+        SetBkMode(hdc, TRANSPARENT);  // 透出下层玻璃卡面
         SetTextColor(hdc, RGB(235, 238, 245));
-        SetBkColor(hdc, RGB(14, 17, 24));
-        static HBRUSH bg = CreateSolidBrush(RGB(14, 17, 24));
-        return (LRESULT)bg;
+        return (LRESULT)GetStockObject(HOLLOW_BRUSH);
     }
     case WM_CLOSE:  // 关闭 = 保存并隐藏（托盘再呼出）
         if (self) self->Save();

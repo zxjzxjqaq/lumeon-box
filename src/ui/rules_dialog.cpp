@@ -1,4 +1,5 @@
 #include "ui/rules_dialog.hpp"
+#include <algorithm>
 #include <commctrl.h>
 #include <windowsx.h>
 #include "core/strutil.hpp"
@@ -8,11 +9,11 @@
 namespace lb {
 
 namespace {
-constexpr int ID_LIST = 107, ID_EXT = 102, ID_COMBO = 103, ID_ADD = 100, ID_DEL = 101,
-              ID_NLIST = 108, ID_NEDIT = 104, ID_NADD = 105, ID_NDEL = 106;
+constexpr int ID_INPUT = 102, ID_COMBO = 103, ID_ADD = 100, ID_LIST = 107, ID_DEL = 101;
 constexpr Category kCatOrder[] = {Category::Doc,    Category::Image,  Category::Video,
                                   Category::Audio,  Category::Archive, Category::Installer,
                                   Category::Other};
+constexpr int kNeverItem = 7;  // 下拉最后一项 = 永不整理
 
 std::wstring TrimLower(std::wstring s) {
     while (!s.empty() && (s.front() == L' ' || s.front() == L'.')) s.erase(s.begin());
@@ -23,7 +24,7 @@ std::wstring TrimLower(std::wstring s) {
 }  // namespace
 
 void RulesDialog::Toggle(RuleSet& rules, const std::wstring& rulesFile) {
-    if (hwnd_) {  // 已开 → 聚焦
+    if (hwnd_) {
         SetForegroundWindow(hwnd_);
         return;
     }
@@ -37,7 +38,7 @@ void RulesDialog::Toggle(RuleSet& rules, const std::wstring& rulesFile) {
     wc.lpszClassName = L"LumenBoxRules";
     RegisterClassW(&wc);
     hwnd_ = CreateWindowExW(WS_EX_TOOLWINDOW, wc.lpszClassName, L"LumenBox 分类规则",
-                            WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, 200, 160, 380, 600,
+                            WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, 200, 200, 372, 300,
                             nullptr, nullptr, wc.hInstance, this);
     ShowWindow(hwnd_, SW_SHOW);
 }
@@ -49,42 +50,48 @@ void RulesDialog::BuildControls(HWND hwnd) {
                              DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
     auto mk = [&](const wchar_t* cls, const wchar_t* text, DWORD style, int x, int y, int w,
                   int h, int id) {
-        HWND c = CreateWindowExW(WS_EX_CLIENTEDGE, cls, text, WS_CHILD | WS_VISIBLE | style, x,
-                                 y, w, h, hwnd, reinterpret_cast<HMENU>(
-                                                     static_cast<INT_PTR>(id)),
-                                 inst, nullptr);
+        HWND c = CreateWindowExW(
+            WS_EX_CLIENTEDGE, cls, text, WS_CHILD | WS_VISIBLE | style, x, y, w, h, hwnd,
+            reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), inst, nullptr);
         SendMessageW(c, WM_SETFONT, (WPARAM)font, TRUE);
         return c;
     };
-    list_ = mk(L"LISTBOX", nullptr, LBS_NOTIFY | LBS_NOINTEGRALHEIGHT | WS_VSCROLL, 10, 10, 344,
-               200, ID_LIST);
-    mk(L"STATIC", L"扩展名 → 格子（自定义覆盖默认）", 0, 10, 218, 300, 20, -1);
-    extEdit_ = mk(L"EDIT", L"", ES_AUTOHSCROLL, 10, 242, 100, 24, ID_EXT);
-    catCombo_ = mk(L"COMBOBOX", nullptr, CBS_DROPDOWNLIST | CBS_HASSTRINGS, 118, 242, 140, 200,
-                   ID_COMBO);
+    input_ = mk(L"EDIT", L"扩展名或文件名，如 apk / 周报.docx", ES_AUTOHSCROLL, 10, 10, 190, 26,
+                ID_INPUT);
+    combo_ = CreateWindowExW(0, L"COMBOBOX", nullptr, WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST,
+                             206, 10, 96, 240, hwnd,
+                             reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_COMBO)), inst,
+                             nullptr);
+    SendMessageW(combo_, WM_SETFONT, (WPARAM)font, TRUE);
     for (auto c : kCatOrder)
-        SendMessageW(catCombo_, CB_ADDSTRING, 0, (LPARAM)CategoryName(c).c_str());
-    SendMessageW(catCombo_, CB_SETCURSEL, 0, 0);
-    mk(L"BUTTON", L"添加/覆盖", BS_PUSHBUTTON, 266, 242, 88, 26, ID_ADD);
-    mk(L"BUTTON", L"删除自定义", BS_PUSHBUTTON, 266, 274, 88, 26, ID_DEL);
-    mk(L"STATIC", L"永不整理（文件名 或 *.扩展名）", 0, 10, 312, 320, 20, -1);
-    neverEdit_ = mk(L"EDIT", L"", ES_AUTOHSCROLL, 10, 336, 200, 24, ID_NEDIT);
-    mk(L"BUTTON", L"加入白名单", BS_PUSHBUTTON, 218, 336, 136, 26, ID_NADD);
-    neverList_ = mk(L"LISTBOX", nullptr, LBS_NOTIFY | LBS_NOINTEGRALHEIGHT | WS_VSCROLL, 10,
-                    366, 344, 150, ID_NLIST);
-    mk(L"BUTTON", L"移除白名单", BS_PUSHBUTTON, 10, 522, 136, 26, ID_NDEL);
-    RebuildLists();
+        ComboBox_AddString(combo_, CategoryName(c).c_str());
+    ComboBox_AddString(combo_, L"永不整理");
+    ComboBox_SetCurSel(combo_, 0);
+    mk(L"BUTTON", L"添加", BS_PUSHBUTTON, 308, 10, 46, 26, ID_ADD);
+    list_ = mk(L"LISTBOX", nullptr, LBS_NOTIFY | LBS_NOINTEGRALHEIGHT | WS_VSCROLL, 10, 44, 344,
+               170, ID_LIST);
+    mk(L"BUTTON", L"删除选中的规则", BS_PUSHBUTTON, 10, 220, 140, 26, ID_DEL);
+    RebuildList();
 }
 
-void RulesDialog::RebuildLists() {
+void RulesDialog::RebuildList() {
+    items_.clear();
+    // 只展示自定义规则与白名单（默认规则隐式生效，不占视线）
+    for (auto& e : rules_->Entries())
+        if (e.custom) items_.push_back({false, e.ext});
+    for (auto& k : rules_->NeverList()) items_.push_back({true, k});
+
     ListBox_ResetContent(list_);
-    for (auto& e : rules_->Entries()) {
-        std::wstring line = L"." + e.ext + L"  →  " + CategoryName(e.cat) +
-                            (e.custom ? L"    [自定义]" : L"    [默认]");
+    for (auto& [isNever, key] : items_) {
+        std::wstring line;
+        if (isNever) {
+            line = key + L"  →  永不整理";
+        } else {
+            Category cat = rules_->Match(key);
+            line = key + L"  →  " + CategoryName(cat);
+        }
         ListBox_AddString(list_, line.c_str());
     }
-    ListBox_ResetContent(neverList_);
-    for (auto& k : rules_->NeverList()) ListBox_AddString(neverList_, k.c_str());
 }
 
 void RulesDialog::Save() {
@@ -105,49 +112,33 @@ LRESULT CALLBACK RulesDialog::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_COMMAND: {
         switch (LOWORD(wp)) {
         case ID_ADD: {
-            wchar_t buf[128]{};
-            Edit_GetText(self->extEdit_, buf, 128);
-            std::wstring ext = TrimLower(buf);
-            if (ext.empty()) break;
-            int sel = ComboBox_GetCurSel(self->catCombo_);
-            Category cat = kCatOrder[sel < 0 ? 0 : sel];
-            self->rules_->SetCustom(ext, cat);
+            wchar_t buf[MAX_PATH]{};
+            Edit_GetText(self->input_, buf, MAX_PATH);
+            std::wstring key = TrimLower(buf);
+            if (key.empty()) break;
+            int sel = ComboBox_GetCurSel(self->combo_);
+            if (sel == kNeverItem) {  // 永不整理
+                if (key[0] != L'*' && key.find(L'.') == std::wstring::npos)
+                    key = L"*." + key;  // 纯词 = 扩展名意图
+                self->rules_->AddNever(key);
+            } else {
+                self->rules_->SetCustom(key, kCatOrder[sel < 0 ? 0 : sel]);
+            }
             self->Save();
-            self->RebuildLists();
+            Edit_SetText(self->input_, L"");
+            self->RebuildList();
             break;
         }
         case ID_DEL: {
             int sel = ListBox_GetCurSel(self->list_);
-            if (sel < 0) break;
-            auto entries = self->rules_->Entries();
-            if (sel < (int)entries.size() && entries[sel].custom) {
-                self->rules_->RemoveCustom(entries[sel].ext);
-                self->Save();
-                self->RebuildLists();
-            }
-            break;
-        }
-        case ID_NADD: {
-            wchar_t buf[MAX_PATH]{};
-            Edit_GetText(self->neverEdit_, buf, MAX_PATH);
-            std::wstring key = TrimLower(buf);
-            if (key.empty()) break;
-            // 用户只输扩展名时自动补 *. 前缀
-            if (key[0] != L'*' && key.find(L'.') == std::wstring::npos) key = L"*." + key;
-            self->rules_->AddNever(key);
+            if (sel < 0 || sel >= (int)self->items_.size()) break;
+            auto [isNever, key] = self->items_[sel];
+            if (isNever)
+                self->rules_->RemoveNever(key);
+            else
+                self->rules_->RemoveCustom(key);
             self->Save();
-            Edit_SetText(self->neverEdit_, L"");
-            self->RebuildLists();
-            break;
-        }
-        case ID_NDEL: {
-            int sel = ListBox_GetCurSel(self->neverList_);
-            if (sel < 0) break;
-            auto it = self->rules_->NeverList().begin();
-            std::advance(it, sel);
-            self->rules_->RemoveNever(*it);
-            self->Save();
-            self->RebuildLists();
+            self->RebuildList();
             break;
         }
         }
