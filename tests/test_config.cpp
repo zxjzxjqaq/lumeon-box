@@ -30,22 +30,20 @@ TEST_CASE("save+load 往返一致", "[config]") {
     c.x = 640;
     c.y = 480;
     c.anchored = false;  // 用户手动摆放过
-    c.free = true;       // 格子自由摆放
-    c.boxes["doc"] = {10, 20, true};
-    c.boxes["image"] = {300, 40, false};
+    c.order = {"doc", "", "image", "video", "audio", "archive", "installer", "other"};
+    c.collapsed = {"doc", "video"};
     REQUIRE(store.save(c));
     auto r = store.load();
     REQUIRE(r.mode == "desktop");
     REQUIRE(r.x == 640);
     REQUIRE(r.y == 480);
     REQUIRE_FALSE(r.anchored);
-    REQUIRE(r.free);
-    REQUIRE(r.boxes.size() == 2);
-    REQUIRE(r.boxes["doc"].x == 10);
-    REQUIRE(r.boxes["doc"].y == 20);
-    REQUIRE(r.boxes["doc"].collapsed);
-    REQUIRE(r.boxes["image"].x == 300);
-    REQUIRE_FALSE(r.boxes["image"].collapsed);
+    REQUIRE(r.order.size() == 8);
+    REQUIRE(r.order[0] == "doc");
+    REQUIRE(r.order[1].empty());  // 空槽
+    REQUIRE(r.order[2] == "image");
+    REQUIRE(r.collapsed.size() == 2);
+    REQUIRE(r.collapsed[0] == "doc");
 }
 
 TEST_CASE("save 原子替换：不留 .tmp 残留", "[config]") {

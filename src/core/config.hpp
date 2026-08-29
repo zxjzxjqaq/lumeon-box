@@ -1,21 +1,16 @@
 #pragma once
 #include <filesystem>
-#include <map>
 #include <string>
+#include <vector>
 
 namespace lb {
-
-// 单个格子的自由摆放状态（grid 坐标，DIP）
-struct BoxState {
-    int x = 0, y = 0;
-    bool collapsed = false;
-};
 
 struct SpikeConfig {
     std::string mode = "independent";  // independent | desktop | bottom
     bool anchored = true;              // true=自动锚定工作区右下；false=用户手动摆放
-    bool free = false;                 // true=格子自由摆放（每格独立位置）
-    std::map<std::string, BoxState> boxes;  // key: doc/image/video/audio/archive/installer/other
+    // 格子槽位顺序：8 个槽位（2 行 × 4 列），值为类目键，空串 = 空槽
+    std::vector<std::string> order;
+    std::vector<std::string> collapsed;  // 折叠的类目键
     int x = 200, y = 200;
     int w = 520, h = 320;
 };

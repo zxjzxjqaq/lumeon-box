@@ -106,8 +106,8 @@ static int Run(HINSTANCE hInst) {
 
     grid.SetOrg(&org);
     grid.Init(win.gfx(), win.Root(), win.DpiScale());
-    grid.SetLayout(cfg.free, cfg.boxes);
-    grid.SetOriginPx(cfg.x + 1, cfg.y + 1, win.hwnd());
+    grid.SetSlots(cfg.order, cfg.collapsed);
+    grid.SetWindowHandle(win.hwnd());
     grid.SetOnExtent([&](float w, float h) {
         RECT work{};
         SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
@@ -129,17 +129,16 @@ static int Run(HINSTANCE hInst) {
         SetWindowPos(win.hwnd(), nullptr, x, y, wd, ht, SWP_NOZORDER | SWP_NOACTIVATE);
         StageTrace("l:extent-applied");
     });
-    grid.SetOnMoved([&] {  // 拖动结束：记录布局与位置、取消自动锚定并立即持久化
-        auto lay = grid.Layout();
-        cfg.free = lay.free;
-        cfg.boxes = std::move(lay.boxes);
+    grid.SetOnMoved([&](bool window_moved) {  // 拖动结束：立即持久化
+        cfg.order = grid.SlotOrder();
+        cfg.collapsed = grid.CollapsedKeys();
         RECT r{};
         GetWindowRect(win.hwnd(), &r);
         cfg.x = r.left;
         cfg.y = r.top;
         cfg.w = r.right - r.left;
         cfg.h = r.bottom - r.top;
-        cfg.anchored = false;
+        if (window_moved) cfg.anchored = false;  // 仅整窗拖动改变锚定态
         store.save(cfg);
     });
     grid.Refresh();

@@ -15,16 +15,10 @@ SpikeConfig ConfigStore::load() const {
         json::json j = json::json::parse(std::ifstream(file_, std::ios::binary));
         c.mode = j.value("mode", c.mode);
         c.anchored = j.value("anchored", c.anchored);
-        c.free = j.value("free", c.free);
-        if (j.contains("boxes") && j["boxes"].is_object()) {
-            for (auto it = j["boxes"].begin(); it != j["boxes"].end(); ++it) {
-                BoxState b;
-                b.x = it.value().value("x", 0);
-                b.y = it.value().value("y", 0);
-                b.collapsed = it.value().value("collapsed", false);
-                c.boxes[it.key()] = b;
-            }
-        }
+        if (j.contains("order") && j["order"].is_array())
+            for (auto& k : j["order"]) c.order.push_back(k.get<std::string>());
+        if (j.contains("collapsed") && j["collapsed"].is_array())
+            for (auto& k : j["collapsed"]) c.collapsed.push_back(k.get<std::string>());
         c.x = j.value("x", c.x);
         c.y = j.value("y", c.y);
         c.w = j.value("w", c.w);
@@ -38,13 +32,10 @@ SpikeConfig ConfigStore::load() const {
 }
 
 bool ConfigStore::save(const SpikeConfig& c) const {
-    json::json boxes = json::json::object();
-    for (auto& [key, b] : c.boxes)
-        boxes[key] = {{"x", b.x}, {"y", b.y}, {"collapsed", b.collapsed}};
     json::json j{{"mode", c.mode},
                  {"anchored", c.anchored},
-                 {"free", c.free},
-                 {"boxes", boxes},
+                 {"order", c.order},
+                 {"collapsed", c.collapsed},
                  {"x", c.x},
                  {"y", c.y},
                  {"w", c.w},
