@@ -1,4 +1,5 @@
 #include <windows.h>
+#include <algorithm>
 #include <filesystem>
 #include <knownfolders.h>
 #include <shlobj.h>
@@ -105,16 +106,41 @@ static int Run(HINSTANCE hInst) {
 
     grid.SetOrg(&org);
     grid.Init(win.gfx(), win.Root(), win.DpiScale());
+    grid.SetLayout(cfg.free, cfg.boxes);
+    grid.SetOriginPx(cfg.x + 1, cfg.y + 1, win.hwnd());
     grid.SetOnExtent([&](float w, float h) {
         RECT work{};
         SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
         const int margin = 24;
         int wd = static_cast<int>(w * win.DpiScale()) + 2;
         int ht = static_cast<int>(h * win.DpiScale()) + 2;
-        SetWindowPos(win.hwnd(), nullptr, work.right - wd - margin,
-                     work.bottom - ht - margin, wd, ht,
-                     SWP_NOZORDER | SWP_NOACTIVATE);
+        int x = work.right - wd - margin;
+        int y = work.bottom - ht - margin;
+        if (!cfg.anchored) {  // 用户手动摆放过：保持左上角，尺寸变化时夹回工作区
+            RECT cur{};
+            GetWindowRect(win.hwnd(), &cur);
+            const int lo_x = static_cast<int>(work.left);
+            const int hi_x = work.right - wd - margin;
+            const int lo_y = static_cast<int>(work.top);
+            const int hi_y = work.bottom - ht - margin;
+            x = std::min(std::max(static_cast<int>(cur.left), lo_x), hi_x);
+            y = std::min(std::max(static_cast<int>(cur.top), lo_y), hi_y);
+        }
+        SetWindowPos(win.hwnd(), nullptr, x, y, wd, ht, SWP_NOZORDER | SWP_NOACTIVATE);
         StageTrace("l:extent-applied");
+    });
+    grid.SetOnMoved([&] {  // 拖动结束：记录布局与位置、取消自动锚定并立即持久化
+        auto lay = grid.Layout();
+        cfg.free = lay.free;
+        cfg.boxes = std::move(lay.boxes);
+        RECT r{};
+        GetWindowRect(win.hwnd(), &r);
+        cfg.x = r.left;
+        cfg.y = r.top;
+        cfg.w = r.right - r.left;
+        cfg.h = r.bottom - r.top;
+        cfg.anchored = false;
+        store.save(cfg);
     });
     grid.Refresh();
     StageTrace("2:grid-ready");

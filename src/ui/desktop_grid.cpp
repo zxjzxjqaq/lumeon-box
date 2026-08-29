@@ -1,5 +1,6 @@
 #include "ui/desktop_grid.hpp"
 #include <algorithm>
+#include "core/strutil.hpp"
 #include <filesystem>
 #include <shellapi.h>
 #include <dwrite.h>
@@ -52,15 +53,12 @@ float DesktopGrid::HeightOf(const Box& b) const {
     return kHeaderH + kPad + static_cast<float>(rows) * kRowH + 4.f;
 }
 
-void DesktopGrid::Relayout() {
+void DesktopGrid::LayoutGridPositions() {
     float x = 0, y = 0, rowMaxH = 0;
     int col = 0;
-    const float totalW = kPerRow * kBoxW + (kPerRow - 1) * kGap;
     for (auto& b : boxes_) {
         float h = HeightOf(b);
         b.rect = {x, y, x + kBoxW, y + h};
-        b.visual->SetOffsetX(x);
-        b.visual->SetOffsetY(y);
         x += kBoxW + kGap;
         rowMaxH = std::max(rowMaxH, h);
         if (++col == kPerRow) {
@@ -70,9 +68,58 @@ void DesktopGrid::Relayout() {
             col = 0;
         }
     }
-    float extentH = y + (col ? rowMaxH : 0);
+}
+
+void DesktopGrid::Relayout() {
+    if (!free_) LayoutGridPositions();
+    float minx = 1e9f, miny = 1e9f, maxx = -1e9f, maxy = -1e9f;
+    for (auto& b : boxes_) {
+        minx = std::min(minx, b.rect.left);
+        miny = std::min(miny, b.rect.top);
+        maxx = std::max(maxx, b.rect.right);
+        maxy = std::max(maxy, b.rect.bottom);
+    }
+    bbox_ = {minx, miny, maxx, maxy};
+    for (auto& b : boxes_) {
+        b.visual->SetOffsetX((b.rect.left - minx) * dpi_);
+        b.visual->SetOffsetY((b.rect.top - miny) * dpi_);
+    }
     gfx_->device->Commit();
-    if (on_extent_) on_extent_(totalW, extentH);
+    if (free_) {
+        // 窗口原点锚在 bbox 左上（origin_px_ 固定）→ 拖单格时其它盒子屏幕位置不动
+        if (hwnd_)
+            SetWindowPos(hwnd_, nullptr,
+                         origin_px_.x + static_cast<int>(minx * dpi_) - 1,
+                         origin_px_.y + static_cast<int>(miny * dpi_) - 1,
+                         static_cast<int>((maxx - minx) * dpi_) + 2,
+                         static_cast<int>((maxy - miny) * dpi_) + 2,
+                         SWP_NOZORDER | SWP_NOACTIVATE);
+    } else if (on_extent_) {
+        on_extent_(maxx - minx, maxy - miny);
+    }
+}
+
+void DesktopGrid::SetLayout(bool free, const std::map<std::string, BoxState>& states) {
+    free_ = free;
+    if (!free) return;
+    LayoutGridPositions();  // 以当前网格位为自由布局起点
+    for (auto& b : boxes_) {
+        auto it = states.find(ToUtf8(CategoryKey(b.cat)));
+        if (it == states.end()) continue;
+        b.collapsed = it->second.collapsed;
+        b.rect = {static_cast<float>(it->second.x), static_cast<float>(it->second.y),
+                  static_cast<float>(it->second.x) + kBoxW,
+                  static_cast<float>(it->second.y) + HeightOf(b)};
+    }
+}
+
+DesktopGrid::SavedLayout DesktopGrid::Layout() const {
+    SavedLayout s;
+    s.free = free_;
+    for (auto& b : boxes_)
+        s.boxes[ToUtf8(CategoryKey(b.cat))] = {static_cast<int>(b.rect.left),
+                                               static_cast<int>(b.rect.top), b.collapsed};
+    return s;
 }
 
 void DesktopGrid::RedrawBox(int i) {
@@ -166,7 +213,7 @@ void DesktopGrid::Refresh() {
 }
 
 int DesktopGrid::BoxAt(float x, float y) const {
-    for (int i = 0; i < kBoxCount; ++i) {
+    for (int i = kBoxCount - 1; i >= 0; --i) {  // 倒序：重叠时上层（后添加）优先
         const auto& r = boxes_[i].rect;
         if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return i;
     }
@@ -223,6 +270,26 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
     int b = BoxAt(x, y);
     switch (msg) {
     case WM_MOUSEMOVE: {
+        if (dragging_) {
+            POINT now{};
+            GetCursorPos(&now);
+            int dx = now.x - drag_cursor0_.x, dy = now.y - drag_cursor0_.y;
+            if (!drag_moved_ && (abs(dx) > 3 || abs(dy) > 3)) drag_moved_ = true;
+            if (!drag_moved_) return;
+            if (box_drag_ >= 0) {  // 单格：grid 坐标位移，Relayout 自适应窗口
+                float ddx = dx / dpi_, ddy = dy / dpi_;
+                float h = HeightOf(boxes_[box_drag_]);
+                boxes_[box_drag_].rect = {box_rect0_.left + ddx, box_rect0_.top + ddy,
+                                          box_rect0_.left + ddx + kBoxW,
+                                          box_rect0_.top + ddy + h};
+                Relayout();
+            } else {  // 整窗
+                SetWindowPos(hwnd_, nullptr, drag_rect0_.left + dx, drag_rect0_.top + dy, 0, 0,
+                             SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+                if (free_) origin_px_ = {drag_rect0_.left + dx + 1, drag_rect0_.top + dy + 1};
+            }
+            return;
+        }
         int row = b >= 0 ? RowIndexAt(boxes_[b], x, y) : -1;
         SetCursor(LoadCursorW(nullptr, row >= 0 ? IDC_HAND : IDC_ARROW));
         if (b != hovered_) {
@@ -233,7 +300,48 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
         }
         break;
     }
+    case WM_LBUTTONDOWN: {
+        // 头栏按下 = 拖动该单格（网格模式首次拖动即进入自由布局）；行不参与
+        bool header = b >= 0 && RowIndexAt(boxes_[b], x, y) == -2;
+        if (header) {
+            free_ = true;  // 拖单格 = 进入自由布局（当前位置即网格位，无缝切换）
+            SetCapture(hwnd);
+            dragging_ = true;
+            box_drag_ = b;
+            drag_moved_ = false;
+            GetCursorPos(&drag_cursor0_);
+            box_rect0_ = boxes_[b].rect;
+            SetCursor(LoadCursorW(nullptr, IDC_SIZEALL));
+        } else if (b < 0) {  // 空隙按下 = 整窗拖动
+            SetCapture(hwnd);
+            dragging_ = true;
+            box_drag_ = -1;
+            drag_moved_ = false;
+            GetCursorPos(&drag_cursor0_);
+            GetWindowRect(hwnd, &drag_rect0_);
+            SetCursor(LoadCursorW(nullptr, IDC_SIZEALL));
+        }
+        break;
+    }
     case WM_LBUTTONUP: {
+        if (dragging_) {
+            ReleaseCapture();
+            dragging_ = false;
+            int bd = box_drag_;
+            box_drag_ = -1;
+            SetCursor(LoadCursorW(nullptr, b >= 0 ? IDC_HAND : IDC_ARROW));
+            if (drag_moved_) {
+                if (on_moved_) on_moved_();  // 宿主持久化（单格位置/整窗位置）
+                break;
+            }
+            if (bd >= 0) {  // 未位移 = 单击头栏 → 折叠；自由模式下折叠态一并持久化
+                boxes_[bd].collapsed = !boxes_[bd].collapsed;
+                Relayout();
+                RedrawBox(bd);
+                if (free_ && on_moved_) on_moved_();
+                break;
+            }
+        }
         if (b >= 0 && RowIndexAt(boxes_[b], x, y) == -2) {  // 头栏点击 = 折叠
             boxes_[b].collapsed = !boxes_[b].collapsed;
             Relayout();
@@ -255,6 +363,10 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
         }
         break;
     }
+    case WM_CAPTURECHANGED:
+        dragging_ = false;  // 拖动被系统打断（如弹窗）即复位
+        box_drag_ = -1;
+        break;
     }
 }
 
@@ -270,6 +382,7 @@ void DesktopGrid::OnTimer(HWND hwnd, UINT id) {
     Box& b = boxes_[id - kTimerBase];
 
     constexpr float T = 0.24f, A = 1.6042f, B = -4.2968f, C = 3.6926f;
+    float endY = (b.rect.top - bbox_.top) * dpi_;  // 视觉偏移为 bbox 相对坐标
     ComPtr<IDCompositionAnimation> op, oy;
     if (FAILED(gfx_->device->CreateAnimation(op.GetAddressOf()))) return;
     if (FAILED(gfx_->device->CreateAnimation(oy.GetAddressOf()))) return;
@@ -277,9 +390,9 @@ void DesktopGrid::OnTimer(HWND hwnd, UINT id) {
     op->AddCubic(0.0, 0.f, 1.f / T, 0.f, 0.f);  // 透明度线性 0→1
     op->End(T, 1.f);
     oy->Reset();
-    oy->AddCubic(0.0, b.rect.top + 14.f, -14.f * C / T, 14.f * -B / (T * T),
-                 14.f * -A / (T * T * T));  // y: +14 → rect.top，ease-out
-    oy->End(T, b.rect.top);
+    oy->AddCubic(0.0, endY + 14.f, -14.f * C / T, 14.f * -B / (T * T),
+                 14.f * -A / (T * T * T));  // y: +14 → endY，ease-out
+    oy->End(T, endY);
     b.visual->SetOffsetY(oy.Get());
     if (ComPtr<IDCompositionVisual3> v3; SUCCEEDED(b.visual.As(&v3)))
         v3->SetOpacity(op.Get());  // 动画版 SetOpacity 在 Visual3

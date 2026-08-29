@@ -29,11 +29,23 @@ TEST_CASE("save+load 往返一致", "[config]") {
     c.mode = "desktop";
     c.x = 640;
     c.y = 480;
+    c.anchored = false;  // 用户手动摆放过
+    c.free = true;       // 格子自由摆放
+    c.boxes["doc"] = {10, 20, true};
+    c.boxes["image"] = {300, 40, false};
     REQUIRE(store.save(c));
     auto r = store.load();
     REQUIRE(r.mode == "desktop");
     REQUIRE(r.x == 640);
     REQUIRE(r.y == 480);
+    REQUIRE_FALSE(r.anchored);
+    REQUIRE(r.free);
+    REQUIRE(r.boxes.size() == 2);
+    REQUIRE(r.boxes["doc"].x == 10);
+    REQUIRE(r.boxes["doc"].y == 20);
+    REQUIRE(r.boxes["doc"].collapsed);
+    REQUIRE(r.boxes["image"].x == 300);
+    REQUIRE_FALSE(r.boxes["image"].collapsed);
 }
 
 TEST_CASE("save 原子替换：不留 .tmp 残留", "[config]") {
