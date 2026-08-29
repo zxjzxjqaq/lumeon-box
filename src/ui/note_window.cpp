@@ -8,9 +8,11 @@
 #include "core/config.hpp"
 #include "core/strutil.hpp"
 #include "ui/glass_window.hpp"
+#include <dwmapi.h>
 
 #pragma comment(lib, "user32")
 #pragma comment(lib, "dwrite")
+#pragma comment(lib, "dwmapi")
 
 namespace lb {
 namespace json = nlohmann;
@@ -66,6 +68,9 @@ bool NoteWindow::Create() {
                             L"LumenBox 便签", WS_POPUP | WS_THICKFRAME | WS_SYSMENU, x, y, 264,
                             324, nullptr, nullptr, wc.hInstance, this);
     if (!hwnd_) return false;
+    // 与格子一致：壁纸直接透过半透明卡面；关掉顶层窗口的 DWM 阴影/边框
+    INT32 noRender = DWMNCRP_DISABLED;
+    DwmSetWindowAttribute(hwnd_, DWMWA_NCRENDERING_POLICY, &noRender, sizeof(noRender));
     if (!gfx_.InitForWindow(hwnd_)) return false;
     dpi_ = static_cast<float>(GetDpiForWindow(hwnd_));
 
@@ -76,7 +81,7 @@ bool NoteWindow::Create() {
                                    reinterpret_cast<IUnknown**>(dwrite_.GetAddressOf()))))
         return false;
     dwrite_->CreateTextFormat(L"Microsoft YaHei UI", nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD,
-                              DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.f,
+                              DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 14.f,
                               L"zh-cn", titleFmt_.GetAddressOf());
 
     // 透明编辑层覆于玻璃卡面（WM_CTLCOLOREDIT 返回空刷透出卡面）
@@ -105,10 +110,10 @@ void NoteWindow::DrawCard(int wPx, int hPx) {
         ctx->Clear(nullptr);
         // 与格子同款液态玻璃卡面（Aurora Glass 规范）
         ComPtr<::ID2D1SolidColorBrush> fill, line, text;
-        ctx->CreateSolidColorBrush(D2D1_COLOR_F{0.043f, 0.055f, 0.078f, 0.74f},
+        ctx->CreateSolidColorBrush(D2D1_COLOR_F{0.043f, 0.055f, 0.078f, 0.62f},
                                    fill.GetAddressOf());
         ctx->CreateSolidColorBrush(D2D1_COLOR_F{1.f, 1.f, 1.f, 0.14f}, line.GetAddressOf());
-        ctx->CreateSolidColorBrush(D2D1_COLOR_F{1.f, 1.f, 1.f, 0.55f}, text.GetAddressOf());
+        ctx->CreateSolidColorBrush(D2D1_COLOR_F{1.f, 1.f, 1.f, 0.92f}, text.GetAddressOf());
         const D2D1_ROUNDED_RECT rr{{0.5f, 0.5f, w - 0.5f, h - 0.5f}, 12.f, 12.f};
         ctx->FillRoundedRectangle(rr, fill.Get());
         ctx->DrawRoundedRectangle(rr, line.Get(), 1.f);
