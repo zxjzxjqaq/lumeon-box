@@ -77,18 +77,19 @@ void DesktopGrid::Relayout() {
 
 void DesktopGrid::RedrawBox(int i) {
     Box& b = boxes_[i];
+    bool active = b.hovered || static_cast<int>(i) == drag_box_;
     float w = kBoxW, h = HeightOf(b);
     auto surface = gfx_->DrawToSurface(w, h, dpi_, [&](::ID2D1DeviceContext* ctx, float) {
         ctx->Clear(nullptr);
 
         // 贴桌模式下窗口是 WorkerW 子窗口，DWM 模糊不可用（仅顶层窗口生效），
-        // 玻璃感由自绘深色卡面承担：#0B0E14 系，悬停微亮（Aurora Glass 规范）
-        auto base = D2D1_COLOR_F{0.043f, 0.055f, 0.078f, b.hovered ? 0.74f : 0.62f};
+        // 玻璃感由自绘深色卡面承担：#0B0E14 系，悬停/拖入微亮（Aurora Glass 规范）
+        auto base = D2D1_COLOR_F{0.043f, 0.055f, 0.078f, active ? 0.74f : 0.62f};
         ComPtr<::ID2D1SolidColorBrush> fill;
         ctx->CreateSolidColorBrush(base, fill.GetAddressOf());
         ComPtr<::ID2D1SolidColorBrush> line;
         ctx->CreateSolidColorBrush(
-            D2D1_COLOR_F{1.f, 1.f, 1.f, b.hovered ? 0.22f : 0.14f}, line.GetAddressOf());
+            D2D1_COLOR_F{1.f, 1.f, 1.f, active ? 0.22f : 0.14f}, line.GetAddressOf());
         ComPtr<::ID2D1SolidColorBrush> text;
         ctx->CreateSolidColorBrush(D2D1_COLOR_F{1.f, 1.f, 1.f, 0.92f}, text.GetAddressOf());
         ComPtr<::ID2D1SolidColorBrush> dim;
@@ -106,8 +107,8 @@ void DesktopGrid::RedrawBox(int i) {
                       {w - 34.f, 6.f, w - 10.f, kHeaderH}, dim.Get());
         ctx->DrawLine({10.f, kHeaderH}, {w - 10.f, kHeaderH}, line.Get(), 0.8f);
 
-        // 行：图标 + 文件名（悬停行走极光渐变描边整卡）
-        if (b.hovered) {
+        // 行：图标 + 文件名（悬停/拖入走极光渐变描边整卡）
+        if (active) {
             D2D1_GRADIENT_STOP gs[3] = {
                 {0.0f, D2D1_COLOR_F{0.133f, 0.827f, 0.933f, 0.9f}},
                 {0.5f, D2D1_COLOR_F{0.506f, 0.549f, 0.973f, 0.9f}},
@@ -170,6 +171,14 @@ int DesktopGrid::BoxAt(float x, float y) const {
         if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return i;
     }
     return -1;
+}
+
+void DesktopGrid::SetDragBox(int i) {
+    if (i == drag_box_) return;
+    int old = drag_box_;
+    drag_box_ = i;
+    if (old >= 0) RedrawBox(old);
+    if (i >= 0) RedrawBox(i);
 }
 
 int DesktopGrid::RowIndexAt(const Box& b, float x, float y) const {

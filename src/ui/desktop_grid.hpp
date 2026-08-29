@@ -30,6 +30,8 @@ public:
     void OnTimer(HWND hwnd, UINT id);
     void OnMouse(HWND hwnd, UINT msg, float x, float y);
     int BoxAt(float x, float y) const; // 命中测试（供窗口 HTTEST 委托）
+    Category CategoryAt(int i) const { return boxes_[i].cat; }
+    void SetDragBox(int i);            // 拖拽悬停高亮（-1 清除）
 
 private:
     struct Box {
@@ -56,6 +58,7 @@ private:
     float dpi_ = 96.f;
     std::vector<Box> boxes_;
     int hovered_ = -1;
+    int drag_box_ = -1;
     Organizer* org_ = nullptr;
     HWND hwnd_ = nullptr;
     std::function<void(float, float)> on_extent_;

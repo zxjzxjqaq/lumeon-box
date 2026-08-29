@@ -16,8 +16,9 @@ FetchContent_MakeAvailable(json catch2)
 enable_testing()
 add_executable(core_tests tests/sanity.cpp tests/test_config.cpp tests/test_rules.cpp
   tests/test_classifier.cpp tests/test_journal.cpp tests/test_organizer.cpp
+  tests/test_drop_target.cpp
   src/core/config.cpp src/core/rules.cpp src/core/classifier.cpp
-  src/core/journal.cpp src/core/organizer.cpp)
+  src/core/journal.cpp src/core/organizer.cpp src/ui/drop_target.cpp)
 target_include_directories(core_tests PRIVATE src)
 target_link_libraries(core_tests PRIVATE Catch2::Catch2WithMain shell32 ole32 nlohmann_json::nlohmann_json)
 target_compile_definitions(core_tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
@@ -26,6 +27,10 @@ add_executable(compo_probe tools/compo_probe.cpp)
 target_link_libraries(compo_probe PRIVATE windowsapp)
 target_compile_definitions(compo_probe PRIVATE UNICODE _UNICODE)
 target_compile_options(compo_probe PRIVATE /utf-8)
+add_executable(drag_probe tools/drag_probe.cpp)
+target_link_libraries(drag_probe PRIVATE ole32 shell32)
+target_compile_definitions(drag_probe PRIVATE UNICODE _UNICODE)
+target_compile_options(drag_probe PRIVATE /utf-8)
 add_test(NAME core COMMAND core_tests)
 
 add_executable(lumenbox WIN32
@@ -39,6 +44,7 @@ add_executable(lumenbox WIN32
   src/ui/card_visual.cpp
   src/ui/desktop_grid.cpp
   src/ui/icons.cpp
+  src/ui/drop_target.cpp
   src/ui/tray.cpp
   src/shell/desktop_layer.cpp
   src/anim/spring_demo.cpp)

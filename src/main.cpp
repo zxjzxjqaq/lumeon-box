@@ -9,6 +9,7 @@
 #include "core/stage_log.hpp"
 #include "shell/desktop_layer.hpp"
 #include "ui/desktop_grid.hpp"
+#include "ui/drop_target.hpp"
 #include "ui/glass_window.hpp"
 #include "ui/tray.hpp"
 
@@ -25,6 +26,8 @@ static std::wstring KnownPath(REFKNOWNFOLDERID id) {
 
 static int Run(HINSTANCE hInst) {
     StageTrace("0:enter-run");
+    // OLE STA：RegisterDragDrop 的前置（拖拽归位 S4）
+    if (FAILED(OleInitialize(nullptr))) StageTrace("ole-init-FAILED");
 
     const std::wstring appData = ConfigStore::default_dir().wstring();
     const std::wstring cfgPath = appData + L"\\config.json";
@@ -91,7 +94,11 @@ static int Run(HINSTANCE hInst) {
     win.OnTimer([&](HWND h, UINT id) { grid.OnTimer(h, id); });
     win.OnMouse([&](UINT msg, float x, float y) { grid.OnMouse(win.hwnd(), msg, x, y); });
     win.OnHitTest([&](float x, float y) {
-        return grid.BoxAt(x, y) >= 0 ? HTCLIENT : HTTRANSPARENT;  // 空白区点击穿透
+        // 全窗 HTCLIENT：OLE 拖放周期性用 WM_NCHITTEST 复验目标，HTTRANSPARENT
+        // 会让复验转投图标层导致拖放丢失（实测）。窗口紧贴格子内容，空白仅
+        // 14px 格间距，放弃穿透换取拖放可靠；图标层交互不受影响（窗口外）。
+        (void)x; (void)y;
+        return HTCLIENT;
     });
 
     grid.SetOrg(&org);
@@ -109,6 +116,23 @@ static int Run(HINSTANCE hInst) {
     });
     grid.Refresh();
     StageTrace("2:grid-ready");
+
+    // 拖拽归位：资源管理器拖文件到格子 → MoveToCategory
+    DropTarget dropTarget;
+    dropTarget.SetHooks(
+        [&](const POINTL& pt) {
+            POINT c{pt.x, pt.y};
+            ScreenToClient(win.hwnd(), &c);
+            return grid.BoxAt(c.x / win.DpiScale() * 96.f, c.y / win.DpiScale() * 96.f);
+        },
+        [&](int box) { return grid.CategoryAt(box); },
+        [&](const std::vector<std::wstring>& files, Category cat) {
+            for (auto& f : files) org.MoveToCategory(f, cat);
+            grid.Refresh();
+        },
+        [&](int box) { grid.SetDragBox(box); });
+    dropTarget.SetWindow(win.hwnd());
+    if (FAILED(RegisterDragDrop(win.hwnd(), &dropTarget))) StageTrace("drag-reg-FAILED");
 
     if (!tray.Add(win.hwnd(), WM_APP + 1, LoadIconW(nullptr, IDI_APPLICATION),
                   L"LumenBox 桌面整理"))
@@ -162,8 +186,10 @@ static int Run(HINSTANCE hInst) {
         DispatchMessageW(&m);
     }
     StageTrace("6:loop-exited");
+    RevokeDragDrop(win.hwnd());
     store.save(cfg);
     tray.Remove();
+    OleUninitialize();
     return 0;
 }
 
