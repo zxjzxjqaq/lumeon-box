@@ -365,34 +365,33 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
             int bd = box_drag_;
             box_drag_ = -1;
             SetCursor(LoadCursorW(nullptr, b >= 0 ? IDC_HAND : IDC_ARROW));
-            if (drag_moved_) {
-                if (on_moved_) on_moved_(bd < 0);  // 整窗=取消锚定；换槽位=仅存顺序
+            if (bd < 0) {  // 整窗拖动
+                if (drag_moved_ && on_moved_) on_moved_(true);
                 break;
             }
-            if (bd >= 0) {
-                if (drag_moved_) {  // 换槽位：拖动盒中心最近槽位；拖出网格则归位
-                    float cx = (boxes_[bd].rect.left + boxes_[bd].rect.right) / 2;
-                    float cy = (boxes_[bd].rect.top + boxes_[bd].rect.bottom) / 2;
-                    int target = NearestSlot(cx, cy);
-                    if (target >= 0 && target != boxes_[bd].slot) {
-                        int other = BoxAtSlot(target);
-                        if (other >= 0)
-                            std::swap(boxes_[other].slot, boxes_[bd].slot);
-                        else
-                            boxes_[bd].slot = target;
-                        if (on_moved_) on_moved_(false);  // 顺序变化持久化
-                    }
-                    Relayout();  // 吸附回整齐槽位
-                    break;
-                }
-                if (drag_on_header_) {  // 未位移的头栏单击 → 折叠并持久化
+            if (!drag_moved_) {  // 未位移的头栏单击 → 折叠并持久化
+                if (drag_on_header_) {
                     boxes_[bd].collapsed = !boxes_[bd].collapsed;
                     Relayout();
                     RedrawBox(bd);
                     if (on_moved_) on_moved_(false);
-                    break;
                 }
+                break;
             }
+            // 换槽位：拖动盒中心最近槽位；拖出网格则归位
+            float cx = (boxes_[bd].rect.left + boxes_[bd].rect.right) / 2;
+            float cy = (boxes_[bd].rect.top + boxes_[bd].rect.bottom) / 2;
+            int target = NearestSlot(cx, cy);
+            if (target >= 0 && target != boxes_[bd].slot) {
+                int other = BoxAtSlot(target);
+                if (other >= 0)
+                    std::swap(boxes_[other].slot, boxes_[bd].slot);
+                else
+                    boxes_[bd].slot = target;
+            }
+            Relayout();  // 吸附回整齐槽位
+            if (on_moved_) on_moved_(false);
+            break;
         }
         if (b >= 0 && RowIndexAt(boxes_[b], x, y) == -2) {  // 头栏点击 = 折叠
             boxes_[b].collapsed = !boxes_[b].collapsed;
