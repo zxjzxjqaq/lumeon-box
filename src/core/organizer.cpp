@@ -54,6 +54,7 @@ Organizer::Summary Organizer::OrganizeAll() {
         if (name.rfind(L"~$", 0) == 0) continue;                 // Office 临时文件
         if (LowerExt(name) == L"lnk") continue;                  // 快捷方式保持原位
         if (IsHiddenOrSystem(it->path())) continue;
+        if (rules_.IsNever(name)) continue;                      // 用户白名单
         Category c = ClassifyFile(name, rules_);
         std::wstring dir = BoxDir(c);
         fs::create_directories(dir, ec);

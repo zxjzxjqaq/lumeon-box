@@ -42,6 +42,52 @@ TEST_CASE("损坏的 rules.json 回默认", "[rules]") {
     REQUIRE(loaded.Match(L"psd") == Category::None); // 自定义丢失
 }
 
+TEST_CASE("白名单：精确名与 *.扩展名，持久化", "[rules]") {
+    auto file = fs::temp_directory_path() / L"lumenbox_tests" / L"rules_never.json";
+    std::error_code ec;
+    fs::remove(file, ec);
+    RuleSet rs;
+    rs.AddNever(L"工作文档.docx");
+    rs.AddNever(L"*.yaml");
+    rs.AddNever(L"*.tmp");
+    REQUIRE(rs.Save(file));
+    auto loaded = RuleSet::Load(file);
+    REQUIRE(loaded.IsNever(L"工作文档.docx"));   // 精确文件名
+    REQUIRE_FALSE(loaded.IsNever(L"别的.docx"));  // 名字不匹配
+    REQUIRE(loaded.IsNever(L"tqt.yaml"));        // *.ext 匹配
+    REQUIRE(loaded.IsNever(L"A.TMP"));           // 大小写不敏感（ext 已小写）
+    REQUIRE_FALSE(loaded.IsNever(L"readme.md"));
+    REQUIRE(loaded.NeverList().size() == 3);
+    REQUIRE(loaded.RemoveNever(L"*.tmp"));
+    REQUIRE_FALSE(loaded.IsNever(L"a.tmp"));
+}
+
+TEST_CASE("自定义规则可移除并回落默认", "[rules]") {
+    RuleSet rs;
+    rs.SetCustom(L"pdf", Category::Other);
+    REQUIRE(rs.Match(L"pdf") == Category::Other);
+    REQUIRE(rs.RemoveCustom(L"pdf"));
+    REQUIRE(rs.Match(L"pdf") == Category::Doc);   // 回落默认
+    REQUIRE_FALSE(rs.RemoveCustom(L"pdf"));       // 再删 = false
+    auto entries = rs.Entries();
+    bool hasPdf = false;
+    for (auto& e : entries) hasPdf |= (e.ext == L"pdf" && !e.custom);
+    REQUIRE(hasPdf);
+}
+
+TEST_CASE("Entries 合并视图：custom 覆盖默认并标注", "[rules]") {
+    RuleSet rs;
+    rs.SetCustom(L"pdf", Category::Other);
+    rs.SetCustom(L"newext", Category::Audio);
+    auto entries = rs.Entries();
+    REQUIRE(entries.size() > 2);
+    for (auto& e : entries) {
+        if (e.ext == L"pdf") { REQUIRE(e.custom); REQUIRE(e.cat == Category::Other); }
+        if (e.ext == L"newext") { REQUIRE(e.custom); REQUIRE(e.cat == Category::Audio); }
+        if (e.ext == L"png") REQUIRE_FALSE(e.custom);
+    }
+}
+
 TEST_CASE("类目中文名与键往返", "[rules]") {
     REQUIRE(CategoryName(Category::Doc) == L"文档");
     REQUIRE(CategoryName(Category::Other) == L"其他");

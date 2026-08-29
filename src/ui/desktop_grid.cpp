@@ -262,12 +262,17 @@ void DesktopGrid::OpenFile(const std::wstring& path) const {
     ShellExecuteW(nullptr, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 }
 
-void DesktopGrid::RowMenu(HWND hwnd, const std::wstring& path) {
+void DesktopGrid::RowMenu(HWND hwnd, int boxIdx, const std::wstring& path) {
+    std::wstring ext = LowerExt(path);
     HMENU m = CreatePopupMenu();
     AppendMenuW(m, MF_STRING, 1, L"打开");
     AppendMenuW(m, MF_STRING, 2, L"打开位置");
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(m, MF_STRING, 3, L"放回桌面");
+    if (!ext.empty() && on_rule_) {
+        std::wstring label = L"同类(." + ext + L")都进此格";
+        AppendMenuW(m, MF_STRING, 4, label.c_str());
+    }
     POINT pt;
     GetCursorPos(&pt);
     SetForegroundWindow(hwnd);  // TrackPopupMenu 需要前台窗口才能正常收起
@@ -282,6 +287,12 @@ void DesktopGrid::RowMenu(HWND hwnd, const std::wstring& path) {
         break;
     case 3:
         if (org_ && org_->MoveBackToDesktop(path)) Refresh();
+        break;
+    case 4:
+        if (on_rule_) {
+            on_rule_(ext, boxes_[boxIdx].cat);
+            Refresh();
+        }
         break;
     }
 }
@@ -304,13 +315,18 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
                 snprintf(t, 64, "d:boxmove %d,%d", dx, dy);
                 StageTrace(t);
             }
-            if (box_drag_ >= 0) {  // 单格：视觉跟随光标，松手换槽位对齐
+            if (box_drag_ >= 0) {
+                // 只动视觉偏移：矩形/命中保持槽位语义，Relayout 不会覆盖拖动
+                drag_delta_ = {dx, dy};
                 float ddx = dx / dpi_, ddy = dy / dpi_;
-                float h = HeightOf(boxes_[box_drag_]);
-                boxes_[box_drag_].rect = {box_rect0_.left + ddx, box_rect0_.top + ddy,
-                                          box_rect0_.left + ddx + kBoxW,
-                                          box_rect0_.top + ddy + h};
-                Relayout();
+                auto& b = boxes_[box_drag_];
+                b.visual->SetOffsetX((b.rect.left - bbox_.left + ddx) * dpi_);
+                b.visual->SetOffsetY((b.rect.top - bbox_.top + ddy) * dpi_);
+                gfx_->device->Commit();
+                // 实时高亮交换目标（拖动盒中心下的槽位）
+                float cx = box_rect0_.left + ddx + kBoxW / 2;
+                float cy = box_rect0_.top + ddy + HeightOf(b) / 2;
+                SetDragBox(BoxAtSlot(NearestSlot(cx, cy)));
             } else {  // 整窗
                 SetWindowPos(hwnd_, nullptr, drag_rect0_.left + dx, drag_rect0_.top + dy, 0, 0,
                              SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
@@ -360,16 +376,18 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
     }
     case WM_LBUTTONUP: {
         if (dragging_) {
-            ReleaseCapture();
-            dragging_ = false;
             int bd = box_drag_;
-            box_drag_ = -1;
+            bool moved = drag_moved_, onhdr = drag_on_header_;
+            ReleaseCapture();  // 可能同步派发 WM_CAPTURECHANGED，先取状态
+            dragging_ = false;
             SetCursor(LoadCursorW(nullptr, b >= 0 ? IDC_HAND : IDC_ARROW));
             if (bd < 0) {  // 整窗拖动
-                if (drag_moved_ && on_moved_) on_moved_(true);
+                StageTrace(moved ? "d:up win-moved" : "d:up win-click");
+                if (moved && on_moved_) on_moved_(true);
                 break;
             }
-            if (!drag_moved_) {  // 未位移的头栏单击 → 折叠并持久化
+            if (!moved) {  // 未位移的头栏单击 → 折叠并持久化
+                StageTrace("d:up click-header");
                 if (drag_on_header_) {
                     boxes_[bd].collapsed = !boxes_[bd].collapsed;
                     Relayout();
@@ -378,10 +396,18 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
                 }
                 break;
             }
-            // 换槽位：拖动盒中心最近槽位；拖出网格则归位
-            float cx = (boxes_[bd].rect.left + boxes_[bd].rect.right) / 2;
-            float cy = (boxes_[bd].rect.top + boxes_[bd].rect.bottom) / 2;
+            // 换槽位：松手光标位置（拖动盒中心）最近槽位；拖出网格则归位
+            SetDragBox(-1);  // 清除拖动中的目标高亮
+            float cx = box_rect0_.left + drag_delta_.x / dpi_ + kBoxW / 2;
+            float cy = box_rect0_.top + drag_delta_.y / dpi_ + HeightOf(boxes_[bd]) / 2;
             int target = NearestSlot(cx, cy);
+            {
+                char t[80];
+                snprintf(t, 80, "d:up bd=%d moved=%d target=%d slot=%d", bd,
+                         (int)drag_moved_, target, boxes_[bd].slot);
+                StageTrace(t);
+            }
+            if (bd >= kBoxCount || bd < 0) break;  // 越界保护
             if (target >= 0 && target != boxes_[bd].slot) {
                 int other = BoxAtSlot(target);
                 if (other >= 0)
@@ -410,7 +436,7 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
     case WM_RBUTTONUP: {
         if (b >= 0) {
             int row = RowIndexAt(boxes_[b], x, y);
-            if (row >= 0) RowMenu(hwnd, boxes_[b].files[row]);
+            if (row >= 0) RowMenu(hwnd, b, boxes_[b].files[row]);
         }
         break;
     }

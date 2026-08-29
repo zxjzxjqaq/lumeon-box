@@ -57,10 +57,10 @@ bool GlassWindow::Create(HINSTANCE hInst, const std::wstring& title,
     return true;
 }
 
-void GlassWindow::ApplyBackdrop() {
+void ApplyGlassBackdrop(HWND hwnd) {
     if (IsWin11OrGreater()) {
         INT32 backdrop = DWMSBT_TRANSIENTWINDOW;
-        if (SUCCEEDED(DwmSetWindowAttribute(hwnd_, DWMWA_SYSTEMBACKDROP_TYPE,
+        if (SUCCEEDED(DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE,
                                             &backdrop, sizeof(backdrop))))
             return;
     }
@@ -74,9 +74,13 @@ void GlassWindow::ApplyBackdrop() {
         constexpr INT32 ACCENT_ENABLE_ACRYLICBLURBEHIND = 4;
         ACCENT_POLICY p{ACCENT_ENABLE_ACRYLICBLURBEHIND, 2, 0xB0101010, 0};  // ABGR
         WCA_DATA d{19 /*WCA_ACCENT_POLICY*/, &p, sizeof(p)};
-        fn(hwnd_, &d);
+        fn(hwnd, &d);
     }
     // 三级退化：不做任何系统模糊，卡片自绘底色保证可读
+}
+
+void GlassWindow::ApplyBackdrop() {
+    ApplyGlassBackdrop(hwnd_);
 }
 
 LRESULT GlassWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {

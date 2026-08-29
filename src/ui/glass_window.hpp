@@ -6,6 +6,10 @@
 
 namespace lb {
 
+// 深色玻璃背景：Win11 走 DWM Acrylic，Win10 走 SetWindowCompositionAttribute
+// 模糊，失败则无系统模糊（卡片自绘底色保底）。供玻璃窗族复用。
+void ApplyGlassBackdrop(HWND hwnd);
+
 struct SpikeConfig;
 
 // 无边框透明窗：WS_EX_NOREDIRECTIONBITMAP，视觉由 DirectComposition 承载

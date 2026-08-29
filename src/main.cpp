@@ -13,6 +13,8 @@
 #include "ui/desktop_grid.hpp"
 #include "ui/drop_target.hpp"
 #include "ui/glass_window.hpp"
+#include "ui/note_window.hpp"
+#include "ui/rules_dialog.hpp"
 #include "ui/tray.hpp"
 
 using namespace lb;
@@ -46,6 +48,8 @@ static int Run(HINSTANCE hInst) {
     DesktopGrid grid;
     TrayIcon tray;
     Autostart autostart;
+    NoteWindow note;
+    RulesDialog rulesDlg;
     bool visible = true;
 
     DesktopMode mode = cfg.mode == "bottom"    ? DesktopMode::Bottom
@@ -129,6 +133,10 @@ static int Run(HINSTANCE hInst) {
         SetWindowPos(win.hwnd(), nullptr, x, y, wd, ht, SWP_NOZORDER | SWP_NOACTIVATE);
         StageTrace("l:extent-applied");
     });
+    grid.SetOnRule([&](const std::wstring& ext, Category cat) {
+        rules.SetCustom(ext, cat);
+        rules.Save(appData + L"\rules.json");
+    });
     grid.SetOnMoved([&](bool window_moved) {  // 拖动结束：立即持久化
         cfg.order = grid.SlotOrder();
         cfg.collapsed = grid.CollapsedKeys();
@@ -173,6 +181,9 @@ static int Run(HINSTANCE hInst) {
                 AppendMenuW(m, MF_STRING, 1, L"一键整理");
                 AppendMenuW(m, MF_STRING, 2, L"撤销上次整理");
                 AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+                AppendMenuW(m, MF_STRING, 5, L"便签");
+                AppendMenuW(m, MF_STRING, 6, L"分类规则...");
+                AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
                 AppendMenuW(m, MF_STRING | (autostart.IsEnabled() ? MF_CHECKED : 0u), 4,
                             L"开机自启");
                 AppendMenuW(m, MF_STRING, 3, L"显示 / 隐藏");
@@ -190,6 +201,8 @@ static int Run(HINSTANCE hInst) {
                 case 4:
                     autostart.IsEnabled() ? autostart.Disable() : autostart.Enable();
                     break;
+                case 5: note.Toggle(); break;
+                case 6: rulesDlg.Toggle(rules, appData + L"\rules.json"); break;
                 case 9: DestroyWindow(win.hwnd()); break;
                 }
             } else if (LOWORD(lp) == WM_LBUTTONDBLCLK) {

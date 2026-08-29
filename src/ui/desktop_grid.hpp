@@ -30,6 +30,10 @@ public:
     void SetHittest(std::function<int(float x, float y)> cb) { hittest_out_ = std::move(cb); }
     // 拖动结束，宿主应持久化；window_moved=整窗位移（取消自动锚定），false=槽位交换/折叠
     void SetOnMoved(std::function<void(bool window_moved)> cb) { on_moved_ = std::move(cb); }
+    // 右键「同类都进此格」：ext 为小写扩展名，宿主写入自定义规则
+    void SetOnRule(std::function<void(const std::wstring& ext, Category cat)> cb) {
+        on_rule_ = std::move(cb);
+    }
     // 启动时注入槽位顺序与折叠态（须在首次 Refresh 前调用；order 含 8 项，空串=空槽）
     void SetSlots(const std::vector<std::string>& order,
                   const std::vector<std::string>& collapsed);
@@ -66,7 +70,7 @@ private:
     void RedrawBox(int i);
     int RowIndexAt(const Box& b, float x, float y) const;   // -1=无  -2=头栏
     void OpenFile(const std::wstring& path) const;
-    void RowMenu(HWND hwnd, const std::wstring& path);      // 行右键：打开/位置/放回
+    void RowMenu(HWND hwnd, int boxIdx, const std::wstring& path);  // 行右键：打开/位置/放回/同类规则
 
     GraphicsContext* gfx_ = nullptr;
     ComPtr<IDCompositionVisual> root_;
@@ -85,6 +89,7 @@ private:
     bool dragging_ = false;
     bool drag_moved_ = false;
     POINT drag_cursor0_{};
+    POINT drag_delta_{};         // 拖动中的光标累计位移（物理像素）
     RECT drag_rect0_{};
     D2D1_RECT_F box_rect0_{};
     Organizer* org_ = nullptr;
@@ -92,6 +97,7 @@ private:
     std::function<void(float, float)> on_extent_;
     std::function<int(float, float)> hittest_out_;
     std::function<void(bool)> on_moved_;
+    std::function<void(const std::wstring&, Category)> on_rule_;
 };
 
 }  // namespace lb

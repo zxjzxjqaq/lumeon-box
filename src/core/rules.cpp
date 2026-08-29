@@ -1,4 +1,5 @@
 #include "core/rules.hpp"
+#include <algorithm>
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include "core/strutil.hpp"
@@ -72,14 +73,45 @@ void RuleSet::SetCustom(std::wstring extLower, Category c) {
     custom_[std::move(extLower)] = c;
 }
 
-void RuleSet::Save(const std::filesystem::path& file) const {
+bool RuleSet::RemoveCustom(std::wstring extLower) {
+    return custom_.erase(std::move(extLower)) > 0;
+}
+
+void RuleSet::AddNever(std::wstring key) {
+    never_.insert(std::move(key));
+}
+
+bool RuleSet::RemoveNever(const std::wstring& key) {
+    return never_.erase(key) > 0;
+}
+
+bool RuleSet::IsNever(const std::wstring& filename) const {
+    if (never_.count(filename)) return true;
+    std::wstring ext = LowerExt(filename);
+    return !ext.empty() && never_.count(L"*." + ext) > 0;
+}
+
+std::vector<RuleEntry> RuleSet::Entries() const {
+    std::vector<RuleEntry> out;
+    for (auto& [ext, cat] : default_)
+        if (!custom_.count(ext)) out.push_back({ext, cat, false});
+    for (auto& [ext, cat] : custom_) out.push_back({ext, cat, true});
+    std::sort(out.begin(), out.end(),
+              [](auto& a, auto& b) { return a.ext < b.ext; });
+    return out;
+}
+
+bool RuleSet::Save(const std::filesystem::path& file) const {
     json::json custom = json::json::object();
     for (auto& [e, c] : custom_) custom[ToUtf8(e)] = ToUtf8(CategoryKey(c));
-    json::json j{{"custom", custom}};
+    json::json never = json::json::array();
+    for (auto& k : never_) never.push_back(ToUtf8(k));
+    json::json j{{"custom", custom}, {"never", never}};
     std::error_code ec;
     std::filesystem::create_directories(file.parent_path(), ec);
     std::ofstream f(file, std::ios::binary);
     f << j.dump(2);
+    return f.good() && !ec;
 }
 
 RuleSet RuleSet::Load(const std::filesystem::path& file) {
@@ -94,6 +126,8 @@ RuleSet RuleSet::Load(const std::filesystem::path& file) {
                 if (c != Category::None) rs.SetCustom(ToWide(it.key()), c);
             }
         }
+        if (j.contains("never") && j["never"].is_array())
+            for (auto& k : j["never"]) rs.AddNever(ToWide(k.get<std::string>()));
     } catch (...) {
         // 损坏即回默认
     }
