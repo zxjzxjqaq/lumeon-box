@@ -1,18 +1,17 @@
 #include "ui/note_window.hpp"
 #include <windowsx.h>
-#include <d2d1_2.h>
-#include <dwrite.h>
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include "core/config.hpp"
 #include "core/strutil.hpp"
-#include "ui/glass_window.hpp"
-#include <dwmapi.h>
 
 #pragma comment(lib, "user32")
-#pragma comment(lib, "dwrite")
-#pragma comment(lib, "dwmapi")
+#pragma comment(lib, "gdi32")
+
+#include <objidl.h>
+#include <gdiplus.h>
+#pragma comment(lib, "gdiplus")
 
 namespace lb {
 namespace json = nlohmann;
@@ -20,9 +19,19 @@ namespace json = nlohmann;
 namespace {
 constexpr int kTimerSave = 1;   // EN_CHANGE 防抖保存
 constexpr int kTitleH = 26;     // 拖拽条高
+constexpr int kW = 264, kH = 324;
 
 std::wstring NoteFile() {
     return ConfigStore::default_dir().wstring() + L"\\notes.json";
+}
+
+ULONG_PTR g_gdipToken = 0;
+
+void EnsureGdiplus() {
+    if (!g_gdipToken) {
+        Gdiplus::GdiplusStartupInput si;
+        Gdiplus::GdiplusStartup(&g_gdipToken, &si, nullptr);
+    }
 }
 }  // namespace
 
@@ -31,13 +40,16 @@ void NoteWindow::Toggle() {
         if (!Create()) return;
         created_ = true;
         ShowWindow(hwnd_, SW_SHOW);
+        ShowWindow(edit_, SW_SHOW);
         return;
     }
     if (IsWindowVisible(hwnd_)) {
         Save();
         ShowWindow(hwnd_, SW_HIDE);
+        ShowWindow(edit_, SW_HIDE);
     } else {
         ShowWindow(hwnd_, SW_SHOW);
+        ShowWindow(edit_, SW_SHOW);
     }
 }
 
@@ -45,6 +57,8 @@ bool NoteWindow::Visible() const { return created_ && IsWindowVisible(hwnd_); }
 
 bool NoteWindow::Create() {
     file_ = NoteFile();
+    if (!hwnd_) {}  // placeholder
+    EnsureGdiplus();
     WNDCLASSW wc{};
     wc.lpfnWndProc = &WndProc;
     wc.hInstance = GetModuleHandleW(nullptr);
@@ -63,68 +77,96 @@ bool NoteWindow::Create() {
         }
     }
 
-    // NOREDIRECTIONBITMAP：内容全由 DComp 呈现（与格子同栈）
-    hwnd_ = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOREDIRECTIONBITMAP, wc.lpszClassName,
-                            L"LumenBox 便签", WS_POPUP | WS_THICKFRAME | WS_SYSMENU, x, y, 264,
-                            324, nullptr, nullptr, wc.hInstance, this);
+    // 分层窗口：逐像素透明玻璃卡
+    hwnd_ = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW, wc.lpszClassName,
+                            L"LumenBox 便签", WS_POPUP, x, y, kW, kH, nullptr, nullptr,
+                            wc.hInstance, this);
     if (!hwnd_) return false;
-    // 与格子一致：壁纸直接透过半透明卡面；关掉顶层窗口的 DWM 阴影/边框
-    INT32 noRender = DWMNCRP_DISABLED;
-    DwmSetWindowAttribute(hwnd_, DWMWA_NCRENDERING_POLICY, &noRender, sizeof(noRender));
-    if (!gfx_.InitForWindow(hwnd_)) return false;
-    dpi_ = static_cast<float>(GetDpiForWindow(hwnd_));
+    if (hwnd_ == INVALID_HANDLE_VALUE) return false;
 
-    if (FAILED(gfx_.device->CreateVisual(card_.GetAddressOf()))) return false;
-    gfx_.root->AddVisual(card_.Get(), TRUE, nullptr);
-
-    if (FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
-                                   reinterpret_cast<IUnknown**>(dwrite_.GetAddressOf()))))
-        return false;
-    dwrite_->CreateTextFormat(L"Microsoft YaHei UI", nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD,
-                              DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 14.f,
-                              L"zh-cn", titleFmt_.GetAddressOf());
-
-    // 透明编辑层覆于玻璃卡面（WM_CTLCOLOREDIT 返回空刷透出卡面）
-    edit_ = CreateWindowExW(0, L"EDIT", L"",
-                            WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE |
-                                ES_AUTOVSCROLL | ES_WANTRETURN,
-                            12, kTitleH + 8, 240, 260, hwnd_, (HMENU)1, wc.hInstance, nullptr);
+    // 编辑弹窗：EDIT 不能作为分层窗口的子控件，独立成层
+    edit_ = CreateWindowExW(WS_EX_TOOLWINDOW, L"EDIT", L"",
+                            WS_POPUP | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL |
+                                ES_WANTRETURN,
+                            0, 0, kW - 24, kH - kTitleH - 16, hwnd_, nullptr,
+                            wc.hInstance, nullptr);
     SendMessageW(edit_, WM_SETFONT,
                  (WPARAM)CreateFontW(-14, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
                                      OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                                      CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei UI"),
                  TRUE);
 
-    RECT rc{};
-    GetClientRect(hwnd_, &rc);
-    DrawCard(rc.right, rc.bottom);
-
+    DrawGlass();
+    SyncEdit();
     Load();
     return true;
 }
 
-void NoteWindow::DrawCard(int wPx, int hPx) {
-    if (!gfx_.device || !titleFmt_) return;  // 未初始化保护
-    float w = wPx / dpi_, h = hPx / dpi_;
-    auto surface = gfx_.DrawToSurface(w, h, dpi_, [&](::ID2D1DeviceContext* ctx, float) {
-        ctx->Clear(nullptr);
-        // 与格子同款液态玻璃卡面（Aurora Glass 规范）
-        ComPtr<::ID2D1SolidColorBrush> fill, line, text;
-        ctx->CreateSolidColorBrush(D2D1_COLOR_F{0.043f, 0.055f, 0.078f, 0.62f},
-                                   fill.GetAddressOf());
-        ctx->CreateSolidColorBrush(D2D1_COLOR_F{1.f, 1.f, 1.f, 0.14f}, line.GetAddressOf());
-        ctx->CreateSolidColorBrush(D2D1_COLOR_F{1.f, 1.f, 1.f, 0.92f}, text.GetAddressOf());
-        const D2D1_ROUNDED_RECT rr{{0.5f, 0.5f, w - 0.5f, h - 0.5f}, 12.f, 12.f};
-        ctx->FillRoundedRectangle(rr, fill.Get());
-        ctx->DrawRoundedRectangle(rr, line.Get(), 1.f);
-        std::wstring title = L"便签";
-        ctx->DrawText(title.c_str(), (UINT32)title.size(), titleFmt_.Get(),
-                      D2D1_RECT_F{10.f, 4.f, 120.f, (float)kTitleH}, text.Get());
-    });
-    if (surface) {
-        card_->SetContent(surface.Get());
-        gfx_.device->Commit();
+void NoteWindow::DrawGlass() {
+    EnsureGdiplus();
+    BITMAPINFO bi{};
+    bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bi.bmiHeader.biWidth = kW;
+    bi.bmiHeader.biHeight = -kH;  // top-down
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+
+    void* bits = nullptr;
+    HDC hdcMem = CreateCompatibleDC(nullptr);
+    HBITMAP dib = CreateDIBSection(hdcMem, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+    auto old = (HBITMAP)SelectObject(hdcMem, dib);
+    {
+        Gdiplus::Graphics g(hdcMem);
+        g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        g.SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAlias);
+        // 玻璃卡面：#0B0E14 0.62α（与格子非悬停态同参）
+        Gdiplus::SolidBrush fill(Gdiplus::Color(158, 11, 14, 20));
+        Gdiplus::Pen stroke(Gdiplus::Color(36, 255, 255, 255), 1.f);
+        Gdiplus::GraphicsPath path;
+        float r = 12.f;
+        Gdiplus::RectF rr(0.5f, 0.5f, kW - 1.f, kH - 1.f);
+        path.AddArc(rr.X, rr.Y, r, r, 180, 90);
+        path.AddArc(rr.X + rr.Width - r, rr.Y, r, r, 270, 90);
+        path.AddArc(rr.X + rr.Width - r, rr.Y + rr.Height - r, r, r, 0, 90);
+        path.AddArc(rr.X, rr.Y + rr.Height - r, r, r, 90, 90);
+        path.CloseFigure();
+        g.FillPath(&fill, &path);
+        g.DrawPath(&stroke, &path);
+        Gdiplus::SolidBrush title(Gdiplus::Color(235, 238, 245));
+        Gdiplus::Font fnt(L"Microsoft YaHei UI", 9.5f, Gdiplus::FontStyleBold,
+                          Gdiplus::UnitPixel);
+        g.DrawString(L"便签", -1, &fnt, Gdiplus::PointF(12, 4), &title);
     }
+
+    // 更新分层窗口（需要预乘 alpha）
+    for (int i = 0; i < kW * kH; ++i) {
+        auto* px = static_cast<uint8_t*>(bits) + i * 4;  // BGRA
+        uint32_t a = px[3];
+        px[0] = uint8_t(px[0] * a / 255);
+        px[1] = uint8_t(px[1] * a / 255);
+        px[2] = uint8_t(px[2] * a / 255);
+    }
+
+    HDC hdcScreen = GetDC(nullptr);
+    POINT src{0, 0};
+    SIZE size{kW, kH};
+    POINT dst{0, 0};  // 位置由 SetWindowPos 单独控制
+    BLENDFUNCTION bf{AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+    UpdateLayeredWindow(hwnd_, hdcScreen, &dst, &size, hdcMem, &src, 0, &bf, ULW_ALPHA);
+    ReleaseDC(nullptr, hdcScreen);
+    SelectObject(hdcMem, old);
+    DeleteObject(dib);
+    DeleteDC(hdcMem);
+    SyncEdit();
+}
+
+void NoteWindow::SyncEdit() {
+    if (!edit_ || !hwnd_) return;
+    RECT r{};
+    GetWindowRect(hwnd_, &r);
+    SetWindowPos(edit_, nullptr, r.left + 12, r.top + kTitleH + 8, r.right - r.left - 24,
+                 r.bottom - r.top - kTitleH - 16, SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
 void NoteWindow::Load() {
@@ -165,24 +207,11 @@ LRESULT CALLBACK NoteWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
                           reinterpret_cast<LONG_PTR>(
                               reinterpret_cast<CREATESTRUCTW*>(lp)->lpCreateParams));
         return DefWindowProcW(hwnd, msg, wp, lp);
-    case WM_NCHITTEST: {
-        LRESULT hit = DefWindowProcW(hwnd, msg, wp, lp);
-        if (hit == HTCLIENT) {
-            POINT pt{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
-            ScreenToClient(hwnd, &pt);
-            if (pt.y < kTitleH) hit = HTCAPTION;  // 顶部拖拽条
-        }
-        return hit;
-    }
-    case WM_SIZE:
-        // M0 教训重演：CreateWindowExW/系统菜单「大小」可能早于图形上下文与
-        // 编辑层就绪送达 WM_SIZE，未初始化直接绘制即 AV——全部就绪才绘制
-        if (self && self->gfx_.device && self->edit_ && wp != SIZE_MINIMIZED) {
-            self->DrawCard(LOWORD(lp), HIWORD(lp));
-            SetWindowPos(self->edit_, nullptr, 12, kTitleH + 8, LOWORD(lp) - 24,
-                         HIWORD(lp) - kTitleH - 16, SWP_NOZORDER | SWP_NOACTIVATE);
-        }
-        return 0;
+    case WM_NCHITTEST:
+        return HTCAPTION;  // 整卡拖动（输入在编辑弹窗层）
+    case WM_WINDOWPOSCHANGED:
+        if (self) self->SyncEdit();
+        break;
     case WM_COMMAND:
         if (HIWORD(wp) == EN_CHANGE && self) {  // 防抖自动保存
             self->dirty_ = true;
@@ -195,18 +224,14 @@ LRESULT CALLBACK NoteWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
             self->Save();
         }
         return 0;
-    case WM_CTLCOLOREDIT: {
-        HDC hdc = (HDC)wp;
-        SetBkMode(hdc, TRANSPARENT);  // 透出下层玻璃卡面
-        SetTextColor(hdc, RGB(235, 238, 245));
-        return (LRESULT)GetStockObject(HOLLOW_BRUSH);
-    }
     case WM_CLOSE:  // 关闭 = 保存并隐藏（托盘再呼出）
         if (self) self->Save();
         ShowWindow(hwnd, SW_HIDE);
+        if (self->edit_) ShowWindow(self->edit_, SW_HIDE);
         return 0;
     case WM_DESTROY:
         if (self) self->Save();
+        if (self->edit_) DestroyWindow(self->edit_);
         return 0;
     }
     return DefWindowProcW(hwnd, msg, wp, lp);

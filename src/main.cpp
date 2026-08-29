@@ -28,7 +28,7 @@ static std::wstring KnownPath(REFKNOWNFOLDERID id) {
     return p;
 }
 
-static int Run(HINSTANCE hInst) {
+static int Run(HINSTANCE hInst, const wchar_t* cmd) {
     StageTrace("0:enter-run");
     // OLE STA：RegisterDragDrop 的前置（拖拽归位 S4）
     if (FAILED(OleInitialize(nullptr))) StageTrace("ole-init-FAILED");
@@ -135,7 +135,7 @@ static int Run(HINSTANCE hInst) {
     });
     grid.SetOnRule([&](const std::wstring& ext, Category cat) {
         rules.SetCustom(ext, cat);
-        rules.Save(appData + L"\rules.json");
+        rules.Save(appData + L"\\rules.json");
     });
     grid.SetOnMoved([&](bool window_moved) {  // 拖动结束：立即持久化
         cfg.order = grid.SlotOrder();
@@ -172,6 +172,7 @@ static int Run(HINSTANCE hInst) {
     if (!tray.Add(win.hwnd(), WM_APP + 1, LoadIconW(nullptr, IDI_APPLICATION),
                   L"LumenBox 桌面整理"))
         StageTrace("tray-add-FAILED");
+    if (cmd && wcsstr(cmd, L"--note")) note.Toggle();  // 调试/自动化入口
 
     win.OnApp([&](UINT msg, WPARAM wp, LPARAM lp) -> LRESULT {
         if (msg == WM_APP + 1) {
@@ -202,7 +203,7 @@ static int Run(HINSTANCE hInst) {
                     autostart.IsEnabled() ? autostart.Disable() : autostart.Enable();
                     break;
                 case 5: note.Toggle(); break;
-                case 6: rulesDlg.Toggle(rules, appData + L"\rules.json"); break;
+                case 6: rulesDlg.Toggle(rules, appData + L"\\rules.json"); break;
                 case 9: DestroyWindow(win.hwnd()); break;
                 }
             } else if (LOWORD(lp) == WM_LBUTTONDBLCLK) {
@@ -238,14 +239,14 @@ static int Run(HINSTANCE hInst) {
     return 0;
 }
 
-int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
+int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR lpCmdLine, int) {
     if (!SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2))
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_SYSTEM_AWARE);
 
     int exit_code = 0;
     std::string err;
     try {
-        exit_code = Run(hInst);
+        exit_code = Run(hInst, lpCmdLine);
     } catch (std::exception const& e) {
         exit_code = 2;
         err = e.what();
