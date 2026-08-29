@@ -3,6 +3,7 @@
 #include <knownfolders.h>
 #include <shlobj.h>
 #include "anim/spring_demo.hpp"  // M0 演示保留编译；主流程不再使用
+#include "core/autostart.hpp"
 #include "core/config.hpp"
 #include "core/organizer.hpp"
 #include "core/rules.hpp"
@@ -43,6 +44,7 @@ static int Run(HINSTANCE hInst) {
     GlassWindow win;
     DesktopGrid grid;
     TrayIcon tray;
+    Autostart autostart;
     bool visible = true;
 
     DesktopMode mode = cfg.mode == "bottom"    ? DesktopMode::Bottom
@@ -146,6 +148,8 @@ static int Run(HINSTANCE hInst) {
                 AppendMenuW(m, MF_STRING, 1, L"一键整理");
                 AppendMenuW(m, MF_STRING, 2, L"撤销上次整理");
                 AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+                AppendMenuW(m, MF_STRING | (autostart.IsEnabled() ? MF_CHECKED : 0u), 4,
+                            L"开机自启");
                 AppendMenuW(m, MF_STRING, 3, L"显示 / 隐藏");
                 AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
                 AppendMenuW(m, MF_STRING, 9, L"退出");
@@ -158,6 +162,9 @@ static int Run(HINSTANCE hInst) {
                 case 1: doOrganize(); break;
                 case 2: doUndo(); break;
                 case 3: toggleVisible(); break;
+                case 4:
+                    autostart.IsEnabled() ? autostart.Disable() : autostart.Enable();
+                    break;
                 case 9: DestroyWindow(win.hwnd()); break;
                 }
             } else if (LOWORD(lp) == WM_LBUTTONDBLCLK) {
