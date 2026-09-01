@@ -19,6 +19,8 @@ TEST_CASE("load: 文件缺失返回默认值", "[config]") {
     REQUIRE(c.mode == "independent");
     REQUIRE(c.x == 200);
     REQUIRE(c.w == 520);
+    REQUIRE(c.watcherMode == "off");     // 默认关闭按格式自动归类
+    REQUIRE(c.hideIconsMode == "hook");
 }
 
 TEST_CASE("save+load 往返一致", "[config]") {
@@ -34,6 +36,8 @@ TEST_CASE("save+load 往返一致", "[config]") {
     c.collapsed = {"doc", "video"};
     c.watcherMode = "auto";
     c.hideIconsMode = "hotkey";
+    c.boxNames["doc"] = "工作";
+    c.boxNames["image"] = "素材";
     REQUIRE(store.save(c));
     auto r = store.load();
     REQUIRE(r.mode == "desktop");
@@ -48,6 +52,8 @@ TEST_CASE("save+load 往返一致", "[config]") {
     REQUIRE(r.collapsed[0] == "doc");
     REQUIRE(r.watcherMode == "auto");
     REQUIRE(r.hideIconsMode == "hotkey");
+    REQUIRE(r.boxNames.at("doc") == "工作");
+    REQUIRE(r.boxNames.at("image") == "素材");
 }
 
 TEST_CASE("save 原子替换：不留 .tmp 残留", "[config]") {

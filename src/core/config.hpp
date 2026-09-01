@@ -1,5 +1,6 @@
 #pragma once
 #include <filesystem>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -14,9 +15,12 @@ struct SpikeConfig {
     int x = 200, y = 200;
     int w = 520, h = 320;
     // M2：自动归类监听策略（off|prompt|auto，D4 默认提示）
-    std::string watcherMode = "prompt";
+    // 用户明确不要按格式自动归类，默认改为 off；仍可在托盘手动开启
+    std::string watcherMode = "off";
     // M2：双击隐藏图标实现（hook|hotkey，D6 默认钩子 + 可切热键）
     std::string hideIconsMode = "hook";
+    // 每格自定义显示名（类目键 → 名称）；缺省用默认类目名
+    std::map<std::string, std::string> boxNames;
 };
 
 class ConfigStore {

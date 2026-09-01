@@ -1,4 +1,5 @@
 #include "ui/desktop_grid.hpp"
+#include "ui/input_box.hpp"
 #include <algorithm>
 #include "core/strutil.hpp"
 #include "core/stage_log.hpp"
@@ -108,6 +109,16 @@ int DesktopGrid::NearestSlot(float x, float y) const {
     return best;
 }
 
+void DesktopGrid::SetBoxNames(const std::map<std::string, std::string>& names) {
+    boxNames_.clear();
+    for (auto& [k, v] : names) boxNames_[ToWide(k)] = ToWide(v);
+}
+
+std::wstring DesktopGrid::DisplayName(Category c) const {
+    auto it = boxNames_.find(CategoryKey(c));
+    return it != boxNames_.end() && !it->second.empty() ? it->second : CategoryName(c);
+}
+
 void DesktopGrid::SetSlots(const std::vector<std::string>& order,
                            const std::vector<std::string>& collapsed) {
     for (auto& b : boxes_) b.slot = -1;
@@ -162,7 +173,7 @@ void DesktopGrid::RedrawBox(int i) {
         ctx->FillRoundedRectangle(rr, fill.Get());
 
         // 头栏：类名 + 计数
-        std::wstring title = CategoryName(b.cat);
+        std::wstring title = DisplayName(b.cat);
         ctx->DrawText(title.c_str(), (UINT32)title.size(), headerFmt_.Get(),
                       {12.f, 6.f, w - 40.f, kHeaderH}, text.Get());
         std::wstring count = std::to_wstring(b.files.size());
@@ -263,16 +274,12 @@ void DesktopGrid::OpenFile(const std::wstring& path) const {
 }
 
 void DesktopGrid::RowMenu(HWND hwnd, int boxIdx, const std::wstring& path) {
-    std::wstring ext = LowerExt(path);
+    (void)boxIdx;
     HMENU m = CreatePopupMenu();
     AppendMenuW(m, MF_STRING, 1, L"打开");
     AppendMenuW(m, MF_STRING, 2, L"打开位置");
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(m, MF_STRING, 3, L"放回桌面");
-    if (!ext.empty() && on_rule_) {
-        std::wstring label = L"同类(." + ext + L")都进此格";
-        AppendMenuW(m, MF_STRING, 4, label.c_str());
-    }
     POINT pt;
     GetCursorPos(&pt);
     SetForegroundWindow(hwnd);  // TrackPopupMenu 需要前台窗口才能正常收起
@@ -288,11 +295,34 @@ void DesktopGrid::RowMenu(HWND hwnd, int boxIdx, const std::wstring& path) {
     case 3:
         if (org_ && org_->MoveBackToDesktop(path)) Refresh();
         break;
-    case 4:
-        if (on_rule_) {
-            on_rule_(ext, boxes_[boxIdx].cat);
-            Refresh();
+    }
+}
+
+void DesktopGrid::HeaderMenu(HWND hwnd, int boxIdx) {
+    if (boxIdx < 0 || boxIdx >= kBoxCount) return;
+    std::wstring curName = DisplayName(boxes_[boxIdx].cat);
+    HMENU m = CreatePopupMenu();
+    AppendMenuW(m, MF_STRING, 1, L"重命名此格…");
+    AppendMenuW(m, MF_STRING, 2, L"清空此格（放回桌面）");
+    POINT pt;
+    GetCursorPos(&pt);
+    SetForegroundWindow(hwnd);
+    int cmd = TrackPopupMenu(m, TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
+                             pt.x, pt.y, 0, hwnd, nullptr);
+    DestroyMenu(m);
+    switch (cmd) {
+    case 1: {
+        std::wstring newName = InputBox(hwnd, L"重命名此格", curName.c_str());
+        if (!newName.empty()) {
+            std::wstring key = CategoryKey(boxes_[boxIdx].cat);
+            boxNames_[key] = newName;
+            if (on_box_renamed_) on_box_renamed_(key, newName);
+            RedrawBox(boxIdx);
         }
+        break;
+    }
+    case 2:
+        if (on_clear_box_) on_clear_box_(boxIdx);
         break;
     }
 }
@@ -436,7 +466,10 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
     case WM_RBUTTONUP: {
         if (b >= 0) {
             int row = RowIndexAt(boxes_[b], x, y);
-            if (row >= 0) RowMenu(hwnd, b, boxes_[b].files[row]);
+            if (row >= 0)
+                RowMenu(hwnd, b, boxes_[b].files[row]);
+            else if (row == -2)  // 头栏右键
+                HeaderMenu(hwnd, b);
         }
         break;
     }

@@ -25,11 +25,14 @@ SpikeConfig ConfigStore::load() const {
         c.h = j.value("h", c.h);
         c.watcherMode = j.value("watcherMode", c.watcherMode);
         c.hideIconsMode = j.value("hideIconsMode", c.hideIconsMode);
+        if (j.contains("boxNames") && j["boxNames"].is_object())
+            for (auto it = j["boxNames"].begin(); it != j["boxNames"].end(); ++it)
+                c.boxNames[it.key()] = it.value().get<std::string>();
         if (c.mode != "independent" && c.mode != "desktop" && c.mode != "bottom")
             c.mode = "independent";
         if (c.watcherMode != "off" && c.watcherMode != "prompt" &&
             c.watcherMode != "auto")
-            c.watcherMode = "prompt";
+            c.watcherMode = "off";
         if (c.hideIconsMode != "hook" && c.hideIconsMode != "hotkey")
             c.hideIconsMode = "hook";
     } catch (...) {
@@ -48,7 +51,8 @@ bool ConfigStore::save(const SpikeConfig& c) const {
                  {"w", c.w},
                  {"h", c.h},
                  {"watcherMode", c.watcherMode},
-                 {"hideIconsMode", c.hideIconsMode}};
+                 {"hideIconsMode", c.hideIconsMode},
+                 {"boxNames", c.boxNames}};
     std::error_code ec;
     fs::create_directories(file_.parent_path(), ec);
     auto tmp = file_.wstring() + L".tmp";

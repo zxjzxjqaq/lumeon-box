@@ -30,10 +30,18 @@ public:
     void SetHittest(std::function<int(float x, float y)> cb) { hittest_out_ = std::move(cb); }
     // 拖动结束，宿主应持久化；window_moved=整窗位移（取消自动锚定），false=槽位交换/折叠
     void SetOnMoved(std::function<void(bool window_moved)> cb) { on_moved_ = std::move(cb); }
-    // 右键「同类都进此格」：ext 为小写扩展名，宿主写入自定义规则
+    // 自定义分类规则由宿主写入（现留接口）；格子不再按格式归类
     void SetOnRule(std::function<void(const std::wstring& ext, Category cat)> cb) {
         on_rule_ = std::move(cb);
     }
+    // 每格自定义显示名（类目键 → 名称）；须在首次 Refresh 前注入
+    void SetBoxNames(const std::map<std::string, std::string>& names);
+    // 头栏右键「重命名此格」：宿主需持久化；「清空此格」：宿主把文件放回桌面
+    void SetOnBoxRenamed(
+        std::function<void(const std::wstring& catKey, const std::wstring& newName)> cb) {
+        on_box_renamed_ = std::move(cb);
+    }
+    void SetOnClearBox(std::function<void(int boxIdx)> cb) { on_clear_box_ = std::move(cb); }
     // 启动时注入槽位顺序与折叠态（须在首次 Refresh 前调用；order 含 8 项，空串=空槽）
     void SetSlots(const std::vector<std::string>& order,
                   const std::vector<std::string>& collapsed);
@@ -70,7 +78,9 @@ private:
     void RedrawBox(int i);
     int RowIndexAt(const Box& b, float x, float y) const;   // -1=无  -2=头栏
     void OpenFile(const std::wstring& path) const;
-    void RowMenu(HWND hwnd, int boxIdx, const std::wstring& path);  // 行右键：打开/位置/放回/同类规则
+    void RowMenu(HWND hwnd, int boxIdx, const std::wstring& path);  // 行右键：打开/位置/放回
+    void HeaderMenu(HWND hwnd, int boxIdx);                 // 头栏右键：重命名/清空
+    std::wstring DisplayName(Category c) const;             // 自定义名或默认类目名
 
     GraphicsContext* gfx_ = nullptr;
     ComPtr<IDCompositionVisual> root_;
@@ -79,6 +89,7 @@ private:
     IconCache icons_;
     float dpi_ = 96.f;
     std::vector<Box> boxes_;
+    std::map<std::wstring, std::wstring> boxNames_;   // 类目键(宽) → 显示名
     D2D1_RECT_F bbox_{};         // 全部格子的包围盒（grid 坐标，DIP）
     int hovered_ = -1;
     int drag_box_ = -1;
@@ -98,6 +109,8 @@ private:
     std::function<int(float, float)> hittest_out_;
     std::function<void(bool)> on_moved_;
     std::function<void(const std::wstring&, Category)> on_rule_;
+    std::function<void(const std::wstring&, const std::wstring&)> on_box_renamed_;
+    std::function<void(int)> on_clear_box_;
 };
 
 }  // namespace lb

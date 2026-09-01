@@ -10,6 +10,7 @@
 #include "core/organizer.hpp"
 #include "core/rules.hpp"
 #include "core/stage_log.hpp"
+#include "core/strutil.hpp"
 #include "core/watcher.hpp"
 #include "shell/desktop_icons.hpp"
 #include "shell/desktop_layer.hpp"
@@ -18,7 +19,6 @@
 #include "ui/glass_window.hpp"
 #include "ui/hint.hpp"
 #include "ui/note_window.hpp"
-#include "ui/rules_dialog.hpp"
 #include "ui/spotlight.hpp"
 #include "ui/tray.hpp"
 
@@ -56,7 +56,6 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
     TrayIcon tray;
     Autostart autostart;
     NoteWindow note;
-    RulesDialog rulesDlg;
     HintToast hint;
     Watcher watcher;
     std::vector<std::wstring> pendingBatch;   // watcher 批次的累积（UI 线程防抖）
@@ -85,11 +84,6 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
                      : cfg.mode == "independent" && !fresh ? DesktopMode::Independent
                                                            : DesktopMode::DesktopLayer;
 
-    auto doOrganize = [&] {
-        org.OrganizeAll();
-        grid.Refresh();
-        grid.AnimateIn(win.hwnd());
-    };
     auto doUndo = [&] {
         org.UndoLast();
         grid.Refresh();
@@ -115,9 +109,6 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
             cfg.mode = mode == DesktopMode::DesktopLayer ? "desktop"
                      : mode == DesktopMode::Bottom       ? "bottom"
                                                          : "independent";
-        } else if (id == 2) {  // Ctrl+Alt+2：一键整理
-            StageTrace("k:ca2-organize");
-            doOrganize();
         } else if (id == 3) {  // 双击隐藏的热键回退路径（hideIconsMode=hotkey）
             StageTrace("k:ca3-hideicons");
             ToggleDesktopIcons();
@@ -131,8 +122,6 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
     StageTrace("1:window-created");
     if (!RegisterHotKey(win.hwnd(), 1, MOD_CONTROL | MOD_ALT, '1'))
         StageTrace("hotkey-CA1-register-FAILED");
-    if (!RegisterHotKey(win.hwnd(), 2, MOD_CONTROL | MOD_ALT, '2'))
-        StageTrace("hotkey-CA2-register-FAILED");
     bool ctrlSpaceFailed = false;
     if (!RegisterHotKey(win.hwnd(), 4, MOD_CONTROL | MOD_NOREPEAT, VK_SPACE)) {
         StageTrace("hotkey-ctrl-space-FAILED");
@@ -212,9 +201,16 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
         SetWindowPos(win.hwnd(), nullptr, x, y, wd, ht, SWP_NOZORDER | SWP_NOACTIVATE);
         StageTrace("l:extent-applied");
     });
-    grid.SetOnRule([&](const std::wstring& ext, Category cat) {
-        rules.SetCustom(ext, cat);
-        rules.Save(appData + L"\\rules.json");
+    // 自定义格子：显示名 + 头栏右键（重命名 / 清空）——按格式归类已移除
+    grid.SetBoxNames(cfg.boxNames);
+    grid.SetOnBoxRenamed([&](const std::wstring& catKey, const std::wstring& newName) {
+        cfg.boxNames[ToUtf8(catKey)] = ToUtf8(newName);
+        store.save(cfg);
+    });
+    grid.SetOnClearBox([&](int boxIdx) {
+        Category c = grid.CategoryAt(boxIdx);
+        for (auto& p : org.FilesIn(c)) org.MoveBackToDesktop(p);
+        grid.Refresh();
     });
     grid.SetOnMoved([&](bool window_moved) {  // 拖动结束：立即持久化
         cfg.order = grid.SlotOrder();
@@ -256,17 +252,7 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
         tray.Balloon(L"热键冲突", L"Ctrl+Space 被占用，快速搜索暂不可用（可在设置后重试）。");
     if (cmd && wcsstr(cmd, L"--note")) note.Toggle();  // 调试/自动化入口
 
-    // M2：运行时切换（托盘菜单调用）
-    auto setWatcherMode = [&](const std::string& m) {
-        cfg.watcherMode = m;
-        store.save(cfg);
-        if (m == "off") {
-            watcher.Stop();
-            watcherStarted = false;
-        } else if (!watcherStarted) {
-            watcherStarted = watcher.Start(desktop, win.hwnd(), WM_APP + 2);
-        }
-    };
+    // 双击隐藏 运行时切换（托盘菜单调用）
     auto setHideMode = [&](const std::string& m) {
         cfg.hideIconsMode = m;
         store.save(cfg);
@@ -299,24 +285,10 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
             if (LOWORD(lp) == WM_RBUTTONUP) {
                 SetForegroundWindow(win.hwnd());
                 HMENU m = CreatePopupMenu();
-                AppendMenuW(m, MF_STRING, 1, L"一键整理");
                 AppendMenuW(m, MF_STRING, 2, L"撤销上次整理");
                 AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
-                AppendMenuW(m, MF_STRING, 5, L"便签");
-                AppendMenuW(m, MF_STRING, 6, L"分类规则...");
+                AppendMenuW(m, MF_STRING, 5, L"新建便签");
                 AppendMenuW(m, MF_STRING, 7, L"快速搜索  (Ctrl+Space)");
-                // 自动归类 子菜单（off|prompt|auto）
-                HMENU autoMenu = CreatePopupMenu();
-                AppendMenuW(autoMenu,
-                            MF_STRING | (cfg.watcherMode == "off" ? MF_CHECKED : 0), 21,
-                            L"关闭");
-                AppendMenuW(autoMenu,
-                            MF_STRING | (cfg.watcherMode == "prompt" ? MF_CHECKED : 0),
-                            22, L"提示归位");
-                AppendMenuW(autoMenu,
-                            MF_STRING | (cfg.watcherMode == "auto" ? MF_CHECKED : 0), 23,
-                            L"全自动");
-                AppendMenuW(m, MF_POPUP, (UINT_PTR)autoMenu, L"自动归类");
                 // 双击隐藏 子菜单（hook|hotkey）
                 HMENU hideMenu = CreatePopupMenu();
                 AppendMenuW(hideMenu,
@@ -336,22 +308,16 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
                 GetCursorPos(&pt);
                 int cmd = TrackPopupMenu(m, TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
                                          pt.x, pt.y, 0, win.hwnd(), nullptr);
-                DestroyMenu(autoMenu);
                 DestroyMenu(hideMenu);
                 DestroyMenu(m);
                 switch (cmd) {
-                case 1: doOrganize(); break;
                 case 2: doUndo(); break;
                 case 3: toggleVisible(); break;
                 case 4:
                     autostart.IsEnabled() ? autostart.Disable() : autostart.Enable();
                     break;
                 case 5: note.Toggle(); break;
-                case 6: rulesDlg.Toggle(rules, appData + L"\\rules.json"); break;
                 case 7: spot.Toggle(); break;
-                case 21: setWatcherMode("off"); break;
-                case 22: setWatcherMode("prompt"); break;
-                case 23: setWatcherMode("auto"); break;
                 case 31: setHideMode("hook"); break;
                 case 32: setHideMode("hotkey"); break;
                 case 9: DestroyWindow(win.hwnd()); break;
