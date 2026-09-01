@@ -4,6 +4,7 @@
 #include <knownfolders.h>
 #include <shlobj.h>
 #include "anim/spring_demo.hpp"  // M0 演示保留编译；主流程不再使用
+#include "core/appindex.hpp"
 #include "core/autostart.hpp"
 #include "core/config.hpp"
 #include "core/organizer.hpp"
@@ -18,6 +19,7 @@
 #include "ui/hint.hpp"
 #include "ui/note_window.hpp"
 #include "ui/rules_dialog.hpp"
+#include "ui/spotlight.hpp"
 #include "ui/tray.hpp"
 
 using namespace lb;
@@ -60,6 +62,24 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
     std::vector<std::wstring> pendingBatch;   // watcher 批次的累积（UI 线程防抖）
     bool visible = true;
 
+    // M2：应用索引启动时读一次并缓存（快速搜索用）；不建全盘索引
+    AppIndex appIndex;
+    appIndex.Build();
+    Spotlight spot;
+    spot.SetApps(&appIndex);
+    spot.SetFilesFn([&]() -> std::vector<std::wstring> {
+        std::vector<std::wstring> out;
+        std::error_code ec;
+        for (fs::directory_iterator it(
+                 desktop, fs::directory_options::skip_permission_denied, ec),
+             end;
+             !ec && it != end; it.increment(ec)) {
+            if (it->is_directory(ec)) continue;
+            out.push_back(it->path().wstring());
+        }
+        return out;
+    });
+
     DesktopMode mode = cfg.mode == "bottom"    ? DesktopMode::Bottom
                      : cfg.mode == "independent" && !fresh ? DesktopMode::Independent
                                                            : DesktopMode::DesktopLayer;
@@ -100,6 +120,9 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
         } else if (id == 3) {  // 双击隐藏的热键回退路径（hideIconsMode=hotkey）
             StageTrace("k:ca3-hideicons");
             ToggleDesktopIcons();
+        } else if (id == 4) {  // Ctrl+Space：快速搜索
+            StageTrace("k:ca4-spotlight");
+            spot.Toggle();
         }
     };
 
@@ -109,6 +132,8 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
         StageTrace("hotkey-CA1-register-FAILED");
     if (!RegisterHotKey(win.hwnd(), 2, MOD_CONTROL | MOD_ALT, '2'))
         StageTrace("hotkey-CA2-register-FAILED");
+    if (!RegisterHotKey(win.hwnd(), 4, MOD_CONTROL | MOD_NOREPEAT, VK_SPACE))
+        StageTrace("hotkey-ctrl-space-FAILED");  // 冲突提示放 S5 托盘
     // 双击隐藏图标：默认钩子（D6），失败或热键模式走 Ctrl+Alt+H
     if (cfg.hideIconsMode == "hook") {
         if (InstallHideHook(win.hwnd(), WM_APP + 3)) {

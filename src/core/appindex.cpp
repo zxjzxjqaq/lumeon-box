@@ -116,4 +116,24 @@ std::vector<AppItem> SearchItems(const std::vector<AppItem>& items,
     return out;
 }
 
+std::vector<AppItem> SearchFiles(const std::vector<std::wstring>& files,
+                                 const std::wstring& q) {
+    std::wstring query = ToLower(q);
+    std::vector<AppItem> out;
+    for (auto& f : files) {
+        std::wstring name = fs::path(f).filename().wstring();
+        if (query.empty() || ToLower(name).find(query) != std::wstring::npos)
+            out.push_back({name, f});
+    }
+    std::stable_sort(out.begin(), out.end(), [&](const AppItem& a, const AppItem& b) {
+        bool pa = ToLower(a.name).rfind(query, 0) == 0;
+        bool pb = ToLower(b.name).rfind(query, 0) == 0;
+        if (pa != pb) return pa;
+        std::wstring na = ToLower(a.name), nb = ToLower(b.name);
+        if (na != nb) return na < nb;
+        return a.path < b.path;
+    });
+    return out;
+}
+
 }  // namespace lb

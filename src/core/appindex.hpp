@@ -15,6 +15,11 @@ struct AppItem {
 std::vector<AppItem> SearchItems(const std::vector<AppItem>& items,
                                  const std::wstring& q);
 
+// 纯函数：桌面文件搜索。files 为绝对路径；返回匹配的 AppItem{文件名, 路径}。
+// 同样前缀优先排序。供聚光灯与单元测试共用。
+std::vector<AppItem> SearchFiles(const std::vector<std::wstring>& files,
+                                 const std::wstring& q);
+
 // 纯函数：按路径去重（首个优先），空路径忽略。供 Build 与单元测试共用。
 void AddUniqueItem(std::vector<AppItem>& items, AppItem it);
 

@@ -46,3 +46,24 @@ TEST_CASE("addunique: 空路径忽略", "[appindex]") {
     AddUniqueItem(items, {L"x", L""});
     REQUIRE(items.empty());
 }
+
+TEST_CASE("searfiles: 大小写不敏感按文件名过滤 + 前缀优先", "[appindex]") {
+    std::vector<std::wstring> files{L"C:\\desk\\Report.pdf", L"C:\\desk\\photo.png",
+                                    L"C:\\desk\\archive.zip"};
+    auto r = SearchFiles(files, L"REP");
+    REQUIRE(r.size() == 1);
+    REQUIRE(r[0].name == L"Report.pdf");
+    REQUIRE(r[0].path == L"C:\\desk\\Report.pdf");
+    auto all = SearchFiles(files, L"");
+    REQUIRE(all.size() == 3);
+    REQUIRE(SearchFiles(files, L"zzz").empty());
+}
+
+TEST_CASE("searfiles: 前缀命中排在子串之前", "[appindex]") {
+    std::vector<std::wstring> files{L"C:\\desk\\anote.txt", L"C:\\desk\\note.md",
+                                    L"C:\\desk\\other.txt"};
+    auto r = SearchFiles(files, L"note");
+    REQUIRE(r.size() == 2);              // anote.txt(子串) + note.md(前缀)
+    REQUIRE(r[0].name == L"note.md");    // 前缀命中优先
+    REQUIRE(r[1].name == L"anote.txt");
+}
