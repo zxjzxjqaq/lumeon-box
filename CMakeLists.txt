@@ -51,6 +51,7 @@ add_executable(lumenbox WIN32
   src/ui/desktop_grid.cpp
   src/ui/icons.cpp
   src/ui/drop_target.cpp
+  src/ui/file_drag.cpp
   src/ui/hint.cpp
   src/ui/input_box.cpp
   src/ui/rules_dialog.cpp

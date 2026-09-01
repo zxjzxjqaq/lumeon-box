@@ -75,6 +75,10 @@ bool Organizer::MoveToCategory(const std::wstring& path, Category c) {
     if (c == Category::None) return false;
     std::error_code ec;
     if (!fs::exists(path, ec) || fs::is_directory(path, ec)) return false;
+    // 已在目标盒目录：视为同盒（拖到自己所在盒），不动，避免生成 “(2)” 副本
+    std::wstring dir = BoxDir(c);
+    std::wstring parent = fs::path(path).parent_path().wstring();
+    if (_wcsicmp(parent.c_str(), dir.c_str()) == 0) return false;
     jr_.BeginBatch();
     return MoveOne(path, c);
 }

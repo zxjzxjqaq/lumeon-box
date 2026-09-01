@@ -1,4 +1,5 @@
 #include "ui/desktop_grid.hpp"
+#include "ui/file_drag.hpp"
 #include "ui/input_box.hpp"
 #include <algorithm>
 #include "core/strutil.hpp"
@@ -334,6 +335,23 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
     int b = BoxAtGrid(x, y);
     switch (msg) {
     case WM_MOUSEMOVE: {
+        if (file_press_) {  // 文件行按下：超过阈值即发起 OLE 文件拖动
+            POINT now{};
+            GetCursorPos(&now);
+            int dx = now.x - drag_cursor0_.x, dy = now.y - drag_cursor0_.y;
+            if (!drag_moved_ && (abs(dx) > 3 || abs(dy) > 3)) drag_moved_ = true;
+            if (drag_moved_) {
+                ReleaseCapture();
+                std::wstring p = pending_file_;
+                file_press_ = false;
+                pending_file_.clear();
+                dragging_ = false;
+                box_drag_ = -1;
+                StartFileDrag(p);  // 拖到桌面/资源管理器/其他格
+                Refresh();                // 放置后重新列格，纳入桌面/跨盒移动
+            }
+            return;
+        }
         if (dragging_) {
             POINT now{};
             GetCursorPos(&now);
@@ -374,16 +392,20 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
         break;
     }
     case WM_LBUTTONDOWN: {
-        // 卡片任意处按下 = 拖动该单格（文件行除外：行是打开/右键目标）；
-        // 空隙按下 = 整窗拖动。头栏窄条曾导致抓边缘误落空隙，故放宽到卡片主体
         int row = b >= 0 ? RowIndexAt(boxes_[b], x, y) : -9;
         {
             char t[96];
             snprintf(t, 96, "d:down b=%d row=%d x=%.0f y=%.0f", b, row, x, y);
             StageTrace(t);
         }
-        bool header = b >= 0 && row != -1;  // -1=行区外（仅头栏+内边距），>=0=文件行
-        if (header) {
+        if (b >= 0 && row >= 0) {  // 文件行：按下即为拖出单个文件的候选
+            file_press_ = true;
+            pending_file_ = boxes_[b].files[row];
+            drag_moved_ = false;
+            GetCursorPos(&drag_cursor0_);
+            SetCapture(hwnd);
+            SetCursor(LoadCursorW(nullptr, IDC_HAND));
+        } else if (b >= 0) {  // 头栏 / 内边距 / 空卡片体 → 拖动该单格
             SetCapture(hwnd);
             dragging_ = true;
             box_drag_ = b;
@@ -405,6 +427,13 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
         break;
     }
     case WM_LBUTTONUP: {
+        if (file_press_) {  // 文件行单击（未移动）：不做动作；双击由 DBLCLK 打开
+            ReleaseCapture();
+            file_press_ = false;
+            pending_file_.clear();
+            SetCursor(LoadCursorW(nullptr, b >= 0 ? IDC_HAND : IDC_ARROW));
+            return;
+        }
         if (dragging_) {
             int bd = box_drag_;
             bool moved = drag_moved_, onhdr = drag_on_header_;
@@ -476,6 +505,8 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
     case WM_CAPTURECHANGED:
         dragging_ = false;  // 拖动被系统打断（如弹窗）即复位
         box_drag_ = -1;
+        file_press_ = false;
+        pending_file_.clear();
         break;
     }
 }

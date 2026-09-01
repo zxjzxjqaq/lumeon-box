@@ -103,6 +103,9 @@ private:
     POINT drag_delta_{};         // 拖动中的光标累计位移（物理像素）
     RECT drag_rect0_{};
     D2D1_RECT_F box_rect0_{};
+    // 文件级拖动：按下文件行 → 移动超阈值即发起 OLE 拖动（拖出/拖到其他格）
+    bool file_press_ = false;
+    std::wstring pending_file_;
     Organizer* org_ = nullptr;
     HWND hwnd_ = nullptr;
     std::function<void(float, float)> on_extent_;

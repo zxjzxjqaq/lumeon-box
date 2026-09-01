@@ -100,6 +100,30 @@ TEST_CASE("拖拽归位与原位被占的撤销", "[organizer]") {
     REQUIRE(fs::exists(d.dir / L"x (2).txt"));
 }
 
+TEST_CASE("拖到自身所在盒 → 不动、不产生副本", "[organizer]") {
+    Desk d;
+    Journal jr(d.jrPath.wstring());
+    RuleSet rules;
+    Organizer org(d.dir.wstring(), rules, jr);
+
+    std::ofstream(d.dir / L"x.txt") << 'x';
+    REQUIRE(org.MoveToCategory(d.dir / L"x.txt", Category::Doc));
+    fs::path in = d.dir / L"LumenBox" / L"文档" / L"x.txt";
+    REQUIRE(fs::exists(in));
+    REQUIRE_FALSE(fs::exists(d.dir / L"LumenBox" / L"文档" / L"x (2).txt"));
+
+    // 拖到同一个盒（已是该目录）→ 应被拒绝，无副本、原文件还在
+    REQUIRE_FALSE(org.MoveToCategory(in.wstring(), Category::Doc));
+    REQUIRE(fs::exists(in));
+    REQUIRE_FALSE(fs::exists(d.dir / L"LumenBox" / L"文档" / L"x (2).txt"));
+    REQUIRE(org.FilesIn(Category::Doc).size() == 1);
+
+    // 拖到另一个盒 → 正常移动
+    REQUIRE(org.MoveToCategory(in.wstring(), Category::Image));
+    REQUIRE(fs::exists(d.dir / L"LumenBox" / L"图片" / L"x.txt"));
+    REQUIRE_FALSE(fs::exists(in));
+}
+
 TEST_CASE("放回桌面：从格子移回桌面根，冲突唯一名，可撤销", "[organizer]") {
     Desk d;
     Journal jr(d.jrPath.wstring());
