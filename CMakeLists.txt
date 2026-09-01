@@ -16,9 +16,11 @@ FetchContent_MakeAvailable(json catch2)
 enable_testing()
 add_executable(core_tests tests/sanity.cpp tests/test_config.cpp tests/test_rules.cpp
   tests/test_classifier.cpp tests/test_journal.cpp tests/test_organizer.cpp
-  tests/test_drop_target.cpp tests/test_autostart.cpp
+  tests/test_drop_target.cpp tests/test_autostart.cpp tests/test_watcher.cpp
+  tests/test_appindex.cpp
   src/core/config.cpp src/core/rules.cpp src/core/classifier.cpp
   src/core/journal.cpp src/core/organizer.cpp src/core/autostart.cpp
+  src/core/watcher.cpp src/core/appindex.cpp
   src/ui/drop_target.cpp)
 target_include_directories(core_tests PRIVATE src)
 target_link_libraries(core_tests PRIVATE Catch2::Catch2WithMain shell32 ole32 nlohmann_json::nlohmann_json)
@@ -42,6 +44,8 @@ add_executable(lumenbox WIN32
   src/core/journal.cpp
   src/core/organizer.cpp
   src/core/autostart.cpp
+  src/core/watcher.cpp
+  src/core/appindex.cpp
   src/ui/glass_window.cpp
   src/ui/card_visual.cpp
   src/ui/desktop_grid.cpp

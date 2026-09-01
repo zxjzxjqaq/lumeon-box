@@ -32,6 +32,8 @@ TEST_CASE("save+load 往返一致", "[config]") {
     c.anchored = false;  // 用户手动摆放过
     c.order = {"doc", "", "image", "video", "audio", "archive", "installer", "other"};
     c.collapsed = {"doc", "video"};
+    c.watcherMode = "auto";
+    c.hideIconsMode = "hotkey";
     REQUIRE(store.save(c));
     auto r = store.load();
     REQUIRE(r.mode == "desktop");
@@ -44,6 +46,8 @@ TEST_CASE("save+load 往返一致", "[config]") {
     REQUIRE(r.order[2] == "image");
     REQUIRE(r.collapsed.size() == 2);
     REQUIRE(r.collapsed[0] == "doc");
+    REQUIRE(r.watcherMode == "auto");
+    REQUIRE(r.hideIconsMode == "hotkey");
 }
 
 TEST_CASE("save 原子替换：不留 .tmp 残留", "[config]") {

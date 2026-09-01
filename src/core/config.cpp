@@ -23,8 +23,15 @@ SpikeConfig ConfigStore::load() const {
         c.y = j.value("y", c.y);
         c.w = j.value("w", c.w);
         c.h = j.value("h", c.h);
+        c.watcherMode = j.value("watcherMode", c.watcherMode);
+        c.hideIconsMode = j.value("hideIconsMode", c.hideIconsMode);
         if (c.mode != "independent" && c.mode != "desktop" && c.mode != "bottom")
             c.mode = "independent";
+        if (c.watcherMode != "off" && c.watcherMode != "prompt" &&
+            c.watcherMode != "auto")
+            c.watcherMode = "prompt";
+        if (c.hideIconsMode != "hook" && c.hideIconsMode != "hotkey")
+            c.hideIconsMode = "hook";
     } catch (...) {
         return SpikeConfig{};  // 损坏即回默认，绝不阻塞启动
     }
@@ -39,7 +46,9 @@ bool ConfigStore::save(const SpikeConfig& c) const {
                  {"x", c.x},
                  {"y", c.y},
                  {"w", c.w},
-                 {"h", c.h}};
+                 {"h", c.h},
+                 {"watcherMode", c.watcherMode},
+                 {"hideIconsMode", c.hideIconsMode}};
     std::error_code ec;
     fs::create_directories(file_.parent_path(), ec);
     auto tmp = file_.wstring() + L".tmp";

@@ -13,6 +13,10 @@ struct SpikeConfig {
     std::vector<std::string> collapsed;  // 折叠的类目键
     int x = 200, y = 200;
     int w = 520, h = 320;
+    // M2：自动归类监听策略（off|prompt|auto，D4 默认提示）
+    std::string watcherMode = "prompt";
+    // M2：双击隐藏图标实现（hook|hotkey，D6 默认钩子 + 可切热键）
+    std::string hideIconsMode = "hook";
 };
 
 class ConfigStore {
