@@ -47,11 +47,8 @@ bool GlassWindow::Create(HINSTANCE hInst, const std::wstring& title,
     if (!gfx_.InitForWindow(hwnd_)) return false;
     StageTrace("c:dcomp-target");
 
-    MARGINS m{-1};  // 让 DWM 玻璃铺满整个客户区
-    DwmExtendFrameIntoClientArea(hwnd_, &m);
-    ApplyBackdrop();
-    StageTrace("c:backdrop");
-
+    // 去掉窗口级系统玻璃：只显示卡片自身的玻璃视觉，不再有包裹 7 格的外围大玻璃矩形。
+    // （原 DwmExtendFrameIntoClientArea(MARGINS{-1}) + ApplyBackdrop() 会使整窗为玻璃矩形）
     ShowWindow(hwnd_, SW_SHOW);
     StageTrace("c:show");
     return true;
