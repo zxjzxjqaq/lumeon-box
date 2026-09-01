@@ -186,6 +186,8 @@ LRESULT CALLBACK Spotlight::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_PAINT:
         if (self) self->Paint();
         return 0;
+    case WM_ERASEBKGND:
+        return 1;  // 禁止系统擦除背景，避免整窗重绘时闪白
     case WM_CHAR:
         if (self && wp >= 32 && wp != 127) {
             if (self->query_.size() < 120) self->query_.push_back((wchar_t)wp);
@@ -214,11 +216,10 @@ LRESULT CALLBACK Spotlight::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_TIMER:
         if (wp == 1 && self) {
             self->caret_on_ = !self->caret_on_;
-            InvalidateRect(hwnd, nullptr, FALSE);
+            // 只重绘头部（光标/查询区），避免整窗闪烁
+            RECT head{0, 0, Spotlight::kW, Spotlight::kHeaderH};
+            InvalidateRect(hwnd, &head, FALSE);
         }
-        return 0;
-    case WM_ACTIVATE:
-        if (self && (LOWORD(wp) == WA_INACTIVE)) self->OnClose();
         return 0;
     case WM_CLOSE:
         if (self) self->OnClose();
