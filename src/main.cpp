@@ -9,10 +9,12 @@
 #include "core/organizer.hpp"
 #include "core/rules.hpp"
 #include "core/stage_log.hpp"
+#include "core/watcher.hpp"
 #include "shell/desktop_layer.hpp"
 #include "ui/desktop_grid.hpp"
 #include "ui/drop_target.hpp"
 #include "ui/glass_window.hpp"
+#include "ui/hint.hpp"
 #include "ui/note_window.hpp"
 #include "ui/rules_dialog.hpp"
 #include "ui/tray.hpp"
@@ -40,9 +42,11 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
     ConfigStore store(cfgPath);
     SpikeConfig cfg = store.load();
 
+    const std::wstring desktop = KnownPath(FOLDERID_Desktop);
+    const std::wstring boxRoot = desktop + L"\\LumenBox";
     RuleSet rules = RuleSet::Load(appData + L"\\rules.json");
     Journal jr(appData + L"\\journal.jsonl");
-    Organizer org(KnownPath(FOLDERID_Desktop), rules, jr);
+    Organizer org(desktop, rules, jr);
 
     GlassWindow win;
     DesktopGrid grid;
@@ -50,6 +54,9 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
     Autostart autostart;
     NoteWindow note;
     RulesDialog rulesDlg;
+    HintToast hint;
+    Watcher watcher;
+    std::vector<std::wstring> pendingBatch;   // watcher 批次的累积（UI 线程防抖）
     bool visible = true;
 
     DesktopMode mode = cfg.mode == "bottom"    ? DesktopMode::Bottom
@@ -98,7 +105,33 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
         StageTrace("hotkey-CA1-register-FAILED");
     if (!RegisterHotKey(win.hwnd(), 2, MOD_CONTROL | MOD_ALT, '2'))
         StageTrace("hotkey-CA2-register-FAILED");
-    win.OnTimer([&](HWND h, UINT id) { grid.OnTimer(h, id); });
+
+    // M2：watcher 批次在 UI 线程做 500ms 防抖合并 → 过滤 → auto 归位 / prompt 提示
+    auto flushPending = [&] {
+        KillTimer(win.hwnd(), 3);
+        if (pendingBatch.empty()) return;
+        std::vector<std::wstring> batch;
+        batch.swap(pendingBatch);
+        std::sort(batch.begin(), batch.end());
+        batch.erase(std::unique(batch.begin(), batch.end()), batch.end());
+        auto landings = SuggestLandings(batch, rules, boxRoot);
+        if (landings.empty()) return;
+        if (cfg.watcherMode == "auto") {
+            for (auto& l : landings) org.MoveToCategory(l.path, l.cat);
+            grid.Refresh();
+        } else {
+            hint.Show(std::move(landings),
+                      [&](std::vector<FileLanding> ls) {
+                          for (auto& l : ls) org.MoveToCategory(l.path, l.cat);
+                          grid.Refresh();
+                      },
+                      [] {});
+        }
+    };
+    win.OnTimer([&](HWND h, UINT id) {
+        if (id == 3) { flushPending(); return; }
+        grid.OnTimer(h, id);
+    });
     win.OnMouse([&](UINT msg, float x, float y) { grid.OnMouse(win.hwnd(), msg, x, y); });
     win.OnHitTest([&](float x, float y) {
         // 全窗 HTCLIENT：OLE 拖放周期性用 WM_NCHITTEST 复验目标，HTTRANSPARENT
@@ -175,6 +208,16 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
     if (cmd && wcsstr(cmd, L"--note")) note.Toggle();  // 调试/自动化入口
 
     win.OnApp([&](UINT msg, WPARAM wp, LPARAM lp) -> LRESULT {
+        if (msg == WM_APP + 2) {  // watcher 批次：UI 线程累积，防抖后处理
+            auto* batch = reinterpret_cast<std::vector<std::wstring>*>(lp);
+            if (batch) {
+                pendingBatch.insert(pendingBatch.end(), batch->begin(), batch->end());
+                delete batch;
+                if (cfg.watcherMode != "off")
+                    SetTimer(win.hwnd(), 3, 500, nullptr);  // 500ms 静默后合并处理
+            }
+            return 0;
+        }
         if (msg == WM_APP + 1) {
             if (LOWORD(lp) == WM_RBUTTONUP) {
                 SetForegroundWindow(win.hwnd());
@@ -226,12 +269,18 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
                                                  : "independent";
     StageTrace("3:mode-restored");
 
+    // M2：自动归类监听（仅当模式非 off）
+    if (cfg.watcherMode != "off" &&
+        !watcher.Start(desktop, win.hwnd(), WM_APP + 2))
+        StageTrace("watcher-start-FAILED");
+
     MSG m;
     while (GetMessageW(&m, nullptr, 0, 0) > 0) {
         TranslateMessage(&m);
         DispatchMessageW(&m);
     }
     StageTrace("6:loop-exited");
+    watcher.Stop();
     RevokeDragDrop(win.hwnd());
     store.save(cfg);
     tray.Remove();

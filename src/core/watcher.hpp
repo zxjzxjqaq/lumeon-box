@@ -1,5 +1,8 @@
 #pragma once
+#include <windows.h>
+#include <atomic>
 #include <string>
+#include <thread>
 #include <vector>
 #include "core/rules.hpp"
 
@@ -19,5 +22,28 @@ struct FileLanding {
 std::vector<FileLanding> SuggestLandings(const std::vector<std::wstring>& paths,
                                          const RuleSet& rules,
                                          const std::wstring& boxDir);
+
+// 后台监听桌面目录：ReadDirectoryChangesW（只监桌面顶层：创建/改名/目录事件）。
+// 每收一批变更，用 PostMessageW 把一个 new std::vector<std::wstring> 发给 notify 窗口
+// （消息参数 msg_，LPARAM 指向该 vector；接收方负责 delete）。
+// 任务方在 UI 线程做 500ms 防抖合并 + SuggestLandings 过滤。
+class Watcher {
+public:
+    ~Watcher() { Stop(); }
+
+    bool Start(const std::wstring& dir, HWND notify, UINT msg);
+    void Stop();
+
+private:
+    static DWORD WINAPI ThreadProc(void* p);
+    void ThreadMain();
+
+    std::wstring dir_;
+    HWND notify_ = nullptr;
+    UINT msg_ = 0;
+    HANDLE dir_handle_ = INVALID_HANDLE_VALUE;   // 主线程打开，Stop 关闭（解除阻塞读）
+    std::thread th_;
+    std::atomic<bool> running_{false};
+};
 
 }  // namespace lb
