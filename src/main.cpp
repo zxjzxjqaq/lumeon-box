@@ -60,6 +60,7 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
     HintToast hint;
     Watcher watcher;
     std::vector<std::wstring> pendingBatch;   // watcher 批次的累积（UI 线程防抖）
+    bool watcherStarted = false;              // watcher 线程是否已运行
     bool visible = true;
 
     // M2：应用索引启动时读一次并缓存（快速搜索用）；不建全盘索引
@@ -132,8 +133,11 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
         StageTrace("hotkey-CA1-register-FAILED");
     if (!RegisterHotKey(win.hwnd(), 2, MOD_CONTROL | MOD_ALT, '2'))
         StageTrace("hotkey-CA2-register-FAILED");
-    if (!RegisterHotKey(win.hwnd(), 4, MOD_CONTROL | MOD_NOREPEAT, VK_SPACE))
-        StageTrace("hotkey-ctrl-space-FAILED");  // 冲突提示放 S5 托盘
+    bool ctrlSpaceFailed = false;
+    if (!RegisterHotKey(win.hwnd(), 4, MOD_CONTROL | MOD_NOREPEAT, VK_SPACE)) {
+        StageTrace("hotkey-ctrl-space-FAILED");
+        ctrlSpaceFailed = true;
+    }
     // 双击隐藏图标：默认钩子（D6），失败或热键模式走 Ctrl+Alt+H
     if (cfg.hideIconsMode == "hook") {
         if (InstallHideHook(win.hwnd(), WM_APP + 3)) {
@@ -247,7 +251,34 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
     if (!tray.Add(win.hwnd(), WM_APP + 1, LoadIconW(nullptr, IDI_APPLICATION),
                   L"LumenBox 桌面整理"))
         StageTrace("tray-add-FAILED");
+    // §5.1 P0：热键冲突一次性提示（托盘气泡，不阻塞主流程）
+    if (ctrlSpaceFailed)
+        tray.Balloon(L"热键冲突", L"Ctrl+Space 被占用，快速搜索暂不可用（可在设置后重试）。");
     if (cmd && wcsstr(cmd, L"--note")) note.Toggle();  // 调试/自动化入口
+
+    // M2：运行时切换（托盘菜单调用）
+    auto setWatcherMode = [&](const std::string& m) {
+        cfg.watcherMode = m;
+        store.save(cfg);
+        if (m == "off") {
+            watcher.Stop();
+            watcherStarted = false;
+        } else if (!watcherStarted) {
+            watcherStarted = watcher.Start(desktop, win.hwnd(), WM_APP + 2);
+        }
+    };
+    auto setHideMode = [&](const std::string& m) {
+        cfg.hideIconsMode = m;
+        store.save(cfg);
+        if (m == "hook") {
+            UnregisterHotKey(win.hwnd(), 3);
+            if (!HideHookInstalled()) InstallHideHook(win.hwnd(), WM_APP + 3);
+        } else {
+            RemoveHideHook();
+            if (!RegisterHotKey(win.hwnd(), 3, MOD_CONTROL | MOD_ALT, 'H'))
+                StageTrace("hotkey-H-register-FAILED");
+        }
+    };
 
     win.OnApp([&](UINT msg, WPARAM wp, LPARAM lp) -> LRESULT {
         if (msg == WM_APP + 3) {  // 双击桌面空白 → 切换图标显隐（钩子路径）
@@ -273,6 +304,28 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
                 AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
                 AppendMenuW(m, MF_STRING, 5, L"便签");
                 AppendMenuW(m, MF_STRING, 6, L"分类规则...");
+                AppendMenuW(m, MF_STRING, 7, L"快速搜索  (Ctrl+Space)");
+                // 自动归类 子菜单（off|prompt|auto）
+                HMENU autoMenu = CreatePopupMenu();
+                AppendMenuW(autoMenu,
+                            MF_STRING | (cfg.watcherMode == "off" ? MF_CHECKED : 0), 21,
+                            L"关闭");
+                AppendMenuW(autoMenu,
+                            MF_STRING | (cfg.watcherMode == "prompt" ? MF_CHECKED : 0),
+                            22, L"提示归位");
+                AppendMenuW(autoMenu,
+                            MF_STRING | (cfg.watcherMode == "auto" ? MF_CHECKED : 0), 23,
+                            L"全自动");
+                AppendMenuW(m, MF_POPUP, (UINT_PTR)autoMenu, L"自动归类");
+                // 双击隐藏 子菜单（hook|hotkey）
+                HMENU hideMenu = CreatePopupMenu();
+                AppendMenuW(hideMenu,
+                            MF_STRING | (cfg.hideIconsMode == "hook" ? MF_CHECKED : 0),
+                            31, L"双击空白（钩子）");
+                AppendMenuW(hideMenu,
+                            MF_STRING | (cfg.hideIconsMode == "hotkey" ? MF_CHECKED : 0),
+                            32, L"热键 Ctrl+Alt+H");
+                AppendMenuW(m, MF_POPUP, (UINT_PTR)hideMenu, L"双击隐藏图标");
                 AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
                 AppendMenuW(m, MF_STRING | (autostart.IsEnabled() ? MF_CHECKED : 0u), 4,
                             L"开机自启");
@@ -283,6 +336,8 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
                 GetCursorPos(&pt);
                 int cmd = TrackPopupMenu(m, TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
                                          pt.x, pt.y, 0, win.hwnd(), nullptr);
+                DestroyMenu(autoMenu);
+                DestroyMenu(hideMenu);
                 DestroyMenu(m);
                 switch (cmd) {
                 case 1: doOrganize(); break;
@@ -293,6 +348,12 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
                     break;
                 case 5: note.Toggle(); break;
                 case 6: rulesDlg.Toggle(rules, appData + L"\\rules.json"); break;
+                case 7: spot.Toggle(); break;
+                case 21: setWatcherMode("off"); break;
+                case 22: setWatcherMode("prompt"); break;
+                case 23: setWatcherMode("auto"); break;
+                case 31: setHideMode("hook"); break;
+                case 32: setHideMode("hotkey"); break;
                 case 9: DestroyWindow(win.hwnd()); break;
                 }
             } else if (LOWORD(lp) == WM_LBUTTONDBLCLK) {
@@ -316,9 +377,10 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
     StageTrace("3:mode-restored");
 
     // M2：自动归类监听（仅当模式非 off）
-    if (cfg.watcherMode != "off" &&
-        !watcher.Start(desktop, win.hwnd(), WM_APP + 2))
-        StageTrace("watcher-start-FAILED");
+    if (cfg.watcherMode != "off") {
+        watcherStarted = watcher.Start(desktop, win.hwnd(), WM_APP + 2);
+        if (!watcherStarted) StageTrace("watcher-start-FAILED");
+    }
 
     MSG m;
     while (GetMessageW(&m, nullptr, 0, 0) > 0) {

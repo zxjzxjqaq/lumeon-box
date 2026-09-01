@@ -9,6 +9,7 @@ class TrayIcon {
 public:
     bool Add(HWND hwnd, UINT callbackMsg, HICON icon, const wchar_t* tip);
     void Remove();
+    void Balloon(const wchar_t* title, const wchar_t* text);  // 一次气泡提示
 
 private:
     HWND hwnd_ = nullptr;

@@ -27,4 +27,17 @@ void TrayIcon::Remove() {
     added_ = false;
 }
 
+void TrayIcon::Balloon(const wchar_t* title, const wchar_t* text) {
+    if (!added_) return;
+    NOTIFYICONDATAW nid{};
+    nid.cbSize = sizeof(nid);
+    nid.hWnd = hwnd_;
+    nid.uID = 1;
+    nid.uFlags = NIF_INFO;
+    nid.dwInfoFlags = NIIF_INFO;
+    wcsncpy_s(nid.szInfoTitle, title, _TRUNCATE);
+    wcsncpy_s(nid.szInfo, text, _TRUNCATE);
+    Shell_NotifyIconW(NIM_MODIFY, &nid);
+}
+
 }  // namespace lb
