@@ -233,7 +233,8 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
         [&](const POINTL& pt) {
             POINT c{pt.x, pt.y};
             ScreenToClient(win.hwnd(), &c);
-            return grid.BoxAt(c.x / win.DpiScale() * 96.f, c.y / win.DpiScale() * 96.f);
+            // 客户端像素 → DIP（与 OnMouse 的 x/dpi*96 同空间）；勿再乘 96
+            return grid.BoxAt(c.x / win.DpiScale(), c.y / win.DpiScale());
         },
         [&](int box) { return grid.CategoryAt(box); },
         [&](const std::vector<std::wstring>& files, Category cat) {

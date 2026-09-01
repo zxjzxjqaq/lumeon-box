@@ -33,6 +33,7 @@ bool GlassWindow::Create(HINSTANCE hInst, const std::wstring& title,
     wc.cbSize = sizeof(wc);
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     wc.lpfnWndProc = &GlassWindow::WndProc;
+    wc.style = CS_DBLCLKS;  // 生成 WM_LBUTTONDBLCLK：支持双击打开格子内文件
     wc.hInstance = hInst;
     wc.lpszClassName = L"LumenBoxGlass";
     RegisterClassExW(&wc);
