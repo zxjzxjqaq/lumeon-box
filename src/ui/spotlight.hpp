@@ -7,8 +7,9 @@
 
 namespace lb {
 
-// 快速搜索聚光灯（Ctrl+Space）：顶部毛玻璃条 + 结果列表（应用在前、桌面文件在后）。
-// 普通 popup + 圆角 region + GDI+ 绘制，键盘直达（输入/上下/回车/Esc），避免分层窗焦点问题。
+// 快速搜索聚光灯（Ctrl+Space）：顶部深色玻璃条 + 结果列表（应用在前、桌面文件在后）。
+// 分层窗口（UpdateLayeredWindow）+ GDI+，静态光标，仅在内容变化时整帧原子重绘——
+// 无系统擦除、无定时器，避免闪烁；键盘直达（输入/上下/回车/Esc）。
 class Spotlight {
 public:
     bool Create(HINSTANCE hInst);
@@ -21,10 +22,11 @@ private:
     static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
     void OnOpen();
     void OnClose();
-    void Refresh();
-    void Paint();
+    void Refresh();   // 更新 hits_ 并整帧重绘
+    void Draw();      // GDI+ → 位图 → UpdateLayeredWindow
     void MoveToTop();
     void Launch(int i);
+    void Validate();  // WM_PAINT：仅清除更新区，避免无效区忙循环
 
     static constexpr int kW = 560, kHeaderH = 46, kRowH = 36, kMaxRows = 9;
     int kH = 0;
@@ -36,7 +38,6 @@ private:
     std::wstring query_;
     int sel_ = 0;
     bool created_ = false;
-    bool caret_on_ = false;
 };
 
 }  // namespace lb
