@@ -68,7 +68,7 @@ HRESULT STDMETHODCALLTYPE DropTarget::DragEnter(IDataObject* obj, DWORD, POINTL 
     }
     obj->AddRef();  // 拖拽期间保活
     UpdateDragBox(box_at_ ? box_at_(pt) : -1);
-    *effect = drag_box_ >= 0 ? DROPEFFECT_MOVE : DROPEFFECT_NONE;
+    *effect = DROPEFFECT_MOVE;  // 整窗可放置：卡片=进格，非卡片=放回桌面
     return S_OK;
 }
 
@@ -79,7 +79,7 @@ HRESULT STDMETHODCALLTYPE DropTarget::DragOver(DWORD, POINTL pt, DWORD* effect) 
         return S_OK;
     }
     UpdateDragBox(box_at_ ? box_at_(pt) : -1);
-    *effect = drag_box_ >= 0 ? DROPEFFECT_MOVE : DROPEFFECT_NONE;
+    *effect = DROPEFFECT_MOVE;
     return S_OK;
 }
 
@@ -101,12 +101,13 @@ HRESULT STDMETHODCALLTYPE DropTarget::Drop(IDataObject* obj, DWORD, POINTL pt, D
     }
     int box = box_at_ ? box_at_(pt) : -1;
     UpdateDragBox(-1);
-    if (box >= 0 && on_files_) {
+    if (on_files_) {
         FORMATETC f{CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
         STGMEDIUM med{};
         if (obj->GetData(&f, &med) == S_OK) {
             auto files = FilesFromHdrop(med.hGlobal);
-            on_files_(files, cat_of_ ? cat_of_(box) : Category::None);
+            // 卡片=进该格；非卡片区=放回桌面（Category::None 语义）
+            on_files_(files, box >= 0 ? cat_of_(box) : Category::None);
             if (med.pUnkForRelease)
                 med.pUnkForRelease->Release();
             else
@@ -115,7 +116,7 @@ HRESULT STDMETHODCALLTYPE DropTarget::Drop(IDataObject* obj, DWORD, POINTL pt, D
     }
     dragging_->Release();
     dragging_ = nullptr;
-    *effect = box >= 0 ? DROPEFFECT_MOVE : DROPEFFECT_NONE;
+    *effect = DROPEFFECT_MOVE;
     return S_OK;
 }
 

@@ -13,8 +13,9 @@ namespace lb {
 // 与 UI/核心层解耦：三个钩子注入，可脱离 DComp 单测（假 IDataObject 直接调方法）。
 class DropTarget : public IDropTarget {
 public:
-    // boxAtScreen: 屏幕坐标 → 格子索引（-1 无）；catOf: 格子索引 → 类目；
-    // onFiles: 归位执行（MoveToCategory + 刷新）；onDragBox: 悬停格子变化高亮（-1 离开）
+    // boxAtScreen: 屏幕坐标 → 格子索引（-1 非卡片）；catOf: 格子索引 → 类目；
+    // onFiles: 归位执行（卡片→MoveToCategory；Category::None→MoveBackToDesktop 放回桌面 + 刷新）；
+    // onDragBox: 悬停格子变化高亮（-1 离开）
     void SetHooks(std::function<int(const POINTL&)> boxAtScreen,
                   std::function<Category(int)> catOf,
                   std::function<void(const std::vector<std::wstring>&, Category)> onFiles,

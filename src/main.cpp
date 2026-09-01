@@ -238,7 +238,12 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
         },
         [&](int box) { return grid.CategoryAt(box); },
         [&](const std::vector<std::wstring>& files, Category cat) {
-            for (auto& f : files) org.MoveToCategory(f, cat);
+            for (auto& f : files) {
+                if (cat == Category::None)
+                    org.MoveBackToDesktop(f);  // 落在非卡片区 = 放回桌面
+                else
+                    org.MoveToCategory(f, cat);
+            }
             grid.Refresh();
         },
         [&](int box) { grid.SetDragBox(box); });

@@ -124,8 +124,13 @@ TEST_CASE("拖拽归位：命中格子才移动并回报类目", "[drop]") {
         [](int box) { return box == 3 ? Category::Audio : Category::None; },
         [&](const std::vector<std::wstring>& files, Category c) {
             gotCat = c;
-            for (auto& f : files)
-                if (org.MoveToCategory(f, c)) got.push_back(f);
+            for (auto& f : files) {
+                if (c == Category::None) {
+                    if (org.MoveBackToDesktop(f)) got.push_back(f);
+                } else if (org.MoveToCategory(f, c)) {
+                    got.push_back(f);
+                }
+            }
         },
         [&](int box) { lastDragBox = box; });
 
@@ -149,17 +154,21 @@ TEST_CASE("拖拽归位：命中格子才移动并回报类目", "[drop]") {
         REQUIRE(fs::exists(d.dir / L"LumenBox" / L"音频" / L"song.mp3"));
     }
 
-    SECTION("空白处拖放 = 拒绝") {
-        HANDLE h = MakeHdrop({(d.dir / L"pic.jpg").wstring()});
+    SECTION("空白处拖放 = 放回桌面") {
+        // 先归位到盒子，再空白处松手 → 应放回桌面根
+        REQUIRE(org.MoveToCategory((d.dir / L"pic.jpg").wstring(), Category::Doc));
+        REQUIRE(fs::exists(d.dir / L"LumenBox" / L"文档" / L"pic.jpg"));
+        HANDLE h = MakeHdrop({(d.dir / L"LumenBox" / L"文档" / L"pic.jpg").wstring()});
         StubDataObject obj(h);
-        POINTL pt{500, 500};
+        POINTL pt{500, 500};  // box_at 返回 -1（非卡片）
         DWORD eff = 0;
         REQUIRE(dt.DragEnter(&obj, 0, pt, &eff) == S_OK);
-        REQUIRE(eff == DROPEFFECT_NONE);
+        REQUIRE(eff == DROPEFFECT_MOVE);
         REQUIRE(dt.Drop(&obj, 0, pt, &eff) == S_OK);
+        REQUIRE(eff == DROPEFFECT_MOVE);          // 接受放置
         GlobalFree(h);
-        REQUIRE(got.empty());
-        REQUIRE(fs::exists(d.dir / L"pic.jpg"));  // 原地不动
+        REQUIRE(fs::exists(d.dir / L"pic.jpg"));   // 已放回桌面根
+        REQUIRE_FALSE(fs::exists(d.dir / L"LumenBox" / L"文档" / L"pic.jpg"));
     }
 
     SECTION("非文件拖放 = 忽略") {
