@@ -10,6 +10,7 @@
 #include "core/rules.hpp"
 #include "core/stage_log.hpp"
 #include "core/watcher.hpp"
+#include "shell/desktop_icons.hpp"
 #include "shell/desktop_layer.hpp"
 #include "ui/desktop_grid.hpp"
 #include "ui/drop_target.hpp"
@@ -96,6 +97,9 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
         } else if (id == 2) {  // Ctrl+Alt+2：一键整理
             StageTrace("k:ca2-organize");
             doOrganize();
+        } else if (id == 3) {  // 双击隐藏的热键回退路径（hideIconsMode=hotkey）
+            StageTrace("k:ca3-hideicons");
+            ToggleDesktopIcons();
         }
     };
 
@@ -105,6 +109,19 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
         StageTrace("hotkey-CA1-register-FAILED");
     if (!RegisterHotKey(win.hwnd(), 2, MOD_CONTROL | MOD_ALT, '2'))
         StageTrace("hotkey-CA2-register-FAILED");
+    // 双击隐藏图标：默认钩子（D6），失败或热键模式走 Ctrl+Alt+H
+    if (cfg.hideIconsMode == "hook") {
+        if (InstallHideHook(win.hwnd(), WM_APP + 3)) {
+            StageTrace("hide-hook-OK");
+        } else {
+            StageTrace("hide-hook-FAILED-fallback-hotkey");
+            if (!RegisterHotKey(win.hwnd(), 3, MOD_CONTROL | MOD_ALT, 'H'))
+                StageTrace("hotkey-H-register-FAILED");
+        }
+    } else {  // hotkey
+        if (!RegisterHotKey(win.hwnd(), 3, MOD_CONTROL | MOD_ALT, 'H'))
+            StageTrace("hotkey-H-register-FAILED");
+    }
 
     // M2：watcher 批次在 UI 线程做 500ms 防抖合并 → 过滤 → auto 归位 / prompt 提示
     auto flushPending = [&] {
@@ -208,6 +225,10 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
     if (cmd && wcsstr(cmd, L"--note")) note.Toggle();  // 调试/自动化入口
 
     win.OnApp([&](UINT msg, WPARAM wp, LPARAM lp) -> LRESULT {
+        if (msg == WM_APP + 3) {  // 双击桌面空白 → 切换图标显隐（钩子路径）
+            ToggleDesktopIcons();
+            return 0;
+        }
         if (msg == WM_APP + 2) {  // watcher 批次：UI 线程累积，防抖后处理
             auto* batch = reinterpret_cast<std::vector<std::wstring>*>(lp);
             if (batch) {
@@ -281,6 +302,7 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
     }
     StageTrace("6:loop-exited");
     watcher.Stop();
+    RemoveHideHook();
     RevokeDragDrop(win.hwnd());
     store.save(cfg);
     tray.Remove();

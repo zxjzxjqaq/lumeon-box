@@ -56,6 +56,7 @@ add_executable(lumenbox WIN32
   src/ui/note_window.cpp
   src/ui/tray.cpp
   src/shell/desktop_layer.cpp
+  src/shell/desktop_icons.cpp
   src/anim/spring_demo.cpp)
 target_include_directories(lumenbox PRIVATE src)
 target_link_libraries(lumenbox PRIVATE d2d1 dwrite dcomp dwmapi shell32 ole32 windowsapp nlohmann_json::nlohmann_json)
