@@ -110,7 +110,7 @@ private:
 
     int BoxAtGrid(float x, float y) const;  // 命中测试，grid 坐标
     float HeightOf(const Box& b) const;
-    void LayoutGridPositions();  // 按盒子顺序排布（kPerRow 列网格，行高取该行最高）→ 写入 rect
+    void LayoutGridPositions();  // 从左到右排、满 4 个换行；不满的末行右对齐（空位在左）
     void Relayout();             // 计算 bbox 并更新视觉偏移；定位回调/自定位
     void RedrawBox(int i);
     void DrawScroll(::ID2D1DeviceContext* ctx, float w, float y0, float y1, int shown,

@@ -120,6 +120,7 @@ float DesktopGrid::HeightOf(const Box& b) const {
 void DesktopGrid::LayoutGridPositions() {
     int n = (int)boxes_.size();
     if (n == 0) return;
+    int gridCols = std::min(kPerRow, n);            // 网格总列数（由最多盒子的行决定）
     int rows = (n + kPerRow - 1) / kPerRow;
     std::vector<float> rowMaxH(rows, 0.f);
     for (int i = 0; i < n; ++i) {
@@ -128,10 +129,17 @@ void DesktopGrid::LayoutGridPositions() {
     }
     std::vector<float> rowY(rows, 0.f);
     for (int r = 1; r < rows; ++r) rowY[r] = rowY[r - 1] + rowMaxH[r - 1] + kGap;
-    for (int i = 0; i < n; ++i) {
-        int row = i / kPerRow, col = i % kPerRow;
-        float x = col * (kBoxW + kGap), y = rowY[row];
-        boxes_[i].rect = {x, y, x + kBoxW, y + HeightOf(boxes_[i])};
+    // 从左到右排，满 4 个换行；不满的末行右对齐（空位留在左侧）
+    for (int r = 0; r < rows; ++r) {
+        int start = r * kPerRow;
+        int count = std::min(kPerRow, n - start);   // 本行盒子数
+        int baseCol = gridCols - count;             // 本行右对齐偏置
+        for (int k = 0; k < count; ++k) {
+            int i = start + k;
+            int col = baseCol + k;
+            float x = col * (kBoxW + kGap), y = rowY[r];
+            boxes_[i].rect = {x, y, x + kBoxW, y + HeightOf(boxes_[i])};
+        }
     }
 }
 
