@@ -23,6 +23,7 @@ public:
     static constexpr float kHeaderH = 34.f, kRowH = 22.f, kPad = 12.f;
     static constexpr int kMaxRows = 12;
     static constexpr UINT kTimerBase = 200;   // AnimateIn 逐格定时器
+    static constexpr UINT kCollapseTimer = 300;  // 单击格头折叠延时（双击改名用）
 
     bool Init(GraphicsContext& gfx, ComPtr<IDCompositionVisual> root, float dpi);
     void SetOrg(Organizer* org) { org_ = org; }
@@ -54,6 +55,8 @@ public:
     void AnimateIn(HWND hwnd);         // 整理后逐格浮入（30ms stagger）
     void OnTimer(HWND hwnd, UINT id);
     void OnMouse(HWND hwnd, UINT msg, float x, float y);
+    // 就地重命名格名的键盘入口（玻璃窗 WM_CHAR/WM_KEYDOWN/WM_KILLFOCUS → 这里）
+    bool OnKeyboard(UINT msg, UINT wp);
     int BoxAt(float x, float y) const; // 命中测试，客户区坐标（含 bbox 偏移换算）
     Category CategoryAt(int i) const { return boxes_[i].cat; }
     void SetDragBox(int i);            // 拖拽悬停高亮（-1 清除）
@@ -81,6 +84,10 @@ private:
     void RowMenu(HWND hwnd, int boxIdx, const std::wstring& path);  // 行右键：打开/位置/放回
     void HeaderMenu(HWND hwnd, int boxIdx);                 // 头栏右键：重命名/清空
     std::wstring DisplayName(Category c) const;             // 自定义名或默认类目名
+    void StartRename(int boxIdx);     // 双击格头 → 就地编辑该格名
+    void CommitRename();              // 提交编辑（回车/点击别处/失焦）
+    void CancelRename();              // 取消（Esc）
+    float HeaderTextWidth(const std::wstring& s) const;     // DWrite 测宽（光标/选中定位）
 
     GraphicsContext* gfx_ = nullptr;
     ComPtr<IDCompositionVisual> root_;
@@ -103,6 +110,13 @@ private:
     POINT drag_delta_{};         // 拖动中的光标累计位移（物理像素）
     RECT drag_rect0_{};
     D2D1_RECT_F box_rect0_{};
+    // 就地重命名格名（双击头栏）：编辑态 + 缓冲 + 光标/选中
+    bool renaming_ = false;
+    int rename_box_ = -1;
+    std::wstring rename_buf_;
+    int rename_caret_ = 0;
+    int rename_selA_ = 0, rename_selB_ = 0;   // 选中区间（selA<selB 时有选中）
+    int collapse_pending_ = -1;               // 延时折叠中的格（与双击判别）
     // 文件级拖动：按下文件行 → 移动超阈值即发起 OLE 拖动（拖出/拖到其他格）
     bool file_press_ = false;
     std::wstring pending_file_;

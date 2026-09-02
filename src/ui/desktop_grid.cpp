@@ -169,14 +169,32 @@ void DesktopGrid::RedrawBox(int i) {
         ctx->CreateSolidColorBrush(D2D1_COLOR_F{1.f, 1.f, 1.f, 0.92f}, text.GetAddressOf());
         ComPtr<::ID2D1SolidColorBrush> dim;
         ctx->CreateSolidColorBrush(D2D1_COLOR_F{1.f, 1.f, 1.f, 0.55f}, dim.GetAddressOf());
+        ComPtr<::ID2D1SolidColorBrush> hl;
+        ctx->CreateSolidColorBrush(D2D1_COLOR_F{1.f, 1.f, 1.f, 0.25f}, hl.GetAddressOf());
 
         const D2D1_ROUNDED_RECT rr{{0.5f, 0.5f, w - 0.5f, h - 0.5f}, 12.f, 12.f};
         ctx->FillRoundedRectangle(rr, fill.Get());
 
-        // 头栏：类名 + 计数
-        std::wstring title = DisplayName(b.cat);
-        ctx->DrawText(title.c_str(), (UINT32)title.size(), headerFmt_.Get(),
-                      {12.f, 6.f, w - 40.f, kHeaderH}, text.Get());
+        // 头栏：类名（就地编辑态则画缓冲 + 选中高亮 + 光标） + 计数
+        if (renaming_ && i == rename_box_) {
+            D2D1_RECT_F tr{12.f, 6.f, w - 40.f, kHeaderH};
+            if (rename_selA_ < rename_selB_) {
+                float sx = tr.left + HeaderTextWidth(rename_buf_.substr(0, rename_selA_));
+                float ex = tr.left + HeaderTextWidth(rename_buf_.substr(0, rename_selB_));
+                if (ex > tr.right - 2) ex = tr.right - 2;
+                if (ex > sx) ctx->FillRectangle(D2D1::RectF(sx, 9.f, ex, kHeaderH - 2), hl.Get());
+            }
+            if (!rename_buf_.empty())
+                ctx->DrawText(rename_buf_.c_str(), (UINT32)rename_buf_.size(), headerFmt_.Get(),
+                              tr, text.Get());
+            float cx = tr.left + HeaderTextWidth(rename_buf_.substr(0, rename_caret_));
+            if (cx > tr.right - 2) cx = tr.right - 2;
+            ctx->FillRectangle(D2D1::RectF(cx, 9.f, cx + 2.f, kHeaderH - 2), dim.Get());
+        } else {
+            std::wstring title = DisplayName(b.cat);
+            ctx->DrawText(title.c_str(), (UINT32)title.size(), headerFmt_.Get(),
+                          {12.f, 6.f, w - 40.f, kHeaderH}, text.Get());
+        }
         std::wstring count = std::to_wstring(b.files.size());
         ctx->DrawText(count.c_str(), (UINT32)count.size(), headerFmt_.Get(),
                       {w - 34.f, 6.f, w - 10.f, kHeaderH}, dim.Get());
@@ -301,7 +319,6 @@ void DesktopGrid::RowMenu(HWND hwnd, int boxIdx, const std::wstring& path) {
 
 void DesktopGrid::HeaderMenu(HWND hwnd, int boxIdx) {
     if (boxIdx < 0 || boxIdx >= kBoxCount) return;
-    std::wstring curName = DisplayName(boxes_[boxIdx].cat);
     HMENU m = CreatePopupMenu();
     AppendMenuW(m, MF_STRING, 1, L"重命名此格…");
     AppendMenuW(m, MF_STRING, 2, L"清空此格（放回桌面）");
@@ -312,26 +329,117 @@ void DesktopGrid::HeaderMenu(HWND hwnd, int boxIdx) {
                              pt.x, pt.y, 0, hwnd, nullptr);
     DestroyMenu(m);
     switch (cmd) {
-    case 1: {
-        std::wstring newName = InputBox(hwnd, L"重命名此格", curName.c_str());
-        if (!newName.empty()) {
-            std::wstring key = CategoryKey(boxes_[boxIdx].cat);
-            boxNames_[key] = newName;
-            if (on_box_renamed_) on_box_renamed_(key, newName);
-            RedrawBox(boxIdx);
-        }
+    case 1:
+        StartRename(boxIdx);  // 就地编辑格名（不再弹窗）
         break;
-    }
     case 2:
         if (on_clear_box_) on_clear_box_(boxIdx);
         break;
     }
 }
 
+float DesktopGrid::HeaderTextWidth(const std::wstring& s) const {
+    if (s.empty()) return 0.f;
+    ComPtr<IDWriteTextLayout> lay;
+    if (FAILED(dwrite_->CreateTextLayout(s.c_str(), (UINT32)s.size(), headerFmt_.Get(),
+                                         kBoxW - 40.f, kHeaderH, &lay)))
+        return 0.f;
+    DWRITE_TEXT_METRICS m{};
+    lay->GetMetrics(&m);
+    return m.widthIncludingTrailingWhitespace;
+}
+
+void DesktopGrid::StartRename(int boxIdx) {
+    if (boxIdx < 0 || boxIdx >= kBoxCount) return;
+    renaming_ = true;
+    rename_box_ = boxIdx;
+    rename_buf_ = DisplayName(boxes_[boxIdx].cat);
+    rename_caret_ = (int)rename_buf_.size();
+    rename_selA_ = 0;
+    rename_selB_ = (int)rename_buf_.size();  // 打开即全选，直接输入替换
+    if (hwnd_) SetFocus(hwnd_);
+    RedrawBox(boxIdx);
+}
+
+void DesktopGrid::CommitRename() {
+    if (!renaming_) return;
+    int boxIdx = rename_box_;
+    renaming_ = false;
+    std::wstring key = CategoryKey(boxes_[boxIdx].cat);
+    std::wstring name = rename_buf_;
+    if (!name.empty() && name != DisplayName(boxes_[boxIdx].cat)) {
+        boxNames_[key] = name;
+        if (on_box_renamed_) on_box_renamed_(key, name);
+    }
+    RedrawBox(boxIdx);
+}
+
+void DesktopGrid::CancelRename() {
+    if (!renaming_) return;
+    int boxIdx = rename_box_;
+    renaming_ = false;
+    RedrawBox(boxIdx);
+}
+
+bool DesktopGrid::OnKeyboard(UINT msg, UINT wp) {
+    if (msg == WM_KILLFOCUS) {  // 失焦（打开搜索/切窗）→ 提交
+        if (!renaming_) return false;
+        CommitRename();
+        return true;
+    }
+    if (!renaming_) return false;
+    if (msg == WM_CHAR) {
+        if (wp >= 0x20 && wp <= 0xFFFF) {
+            if (rename_selA_ < rename_selB_) {
+                rename_buf_.erase(rename_selA_, rename_selB_ - rename_selA_);
+                rename_caret_ = rename_selA_;
+                rename_selA_ = rename_selB_ = 0;
+            }
+            rename_buf_.insert(rename_caret_, 1, (wchar_t)wp);
+            ++rename_caret_;
+            RedrawBox(rename_box_);
+        }
+        return true;
+    }
+    if (msg == WM_KEYDOWN) {
+        switch ((int)wp) {
+        case VK_LEFT:  if (rename_caret_ > 0) --rename_caret_; rename_selA_ = rename_selB_ = 0; break;
+        case VK_RIGHT: if (rename_caret_ < (int)rename_buf_.size()) ++rename_caret_; rename_selA_ = rename_selB_ = 0; break;
+        case VK_HOME:  rename_caret_ = 0; rename_selA_ = rename_selB_ = 0; break;
+        case VK_END:   rename_caret_ = (int)rename_buf_.size(); rename_selA_ = rename_selB_ = 0; break;
+        case VK_BACK:
+            if (rename_selA_ < rename_selB_) {
+                rename_buf_.erase(rename_selA_, rename_selB_ - rename_selA_);
+                rename_caret_ = rename_selA_; rename_selA_ = rename_selB_ = 0;
+            } else if (rename_caret_ > 0) {
+                rename_buf_.erase(rename_caret_ - 1, 1);
+                --rename_caret_;
+            }
+            break;
+        case VK_DELETE:
+            if (rename_selA_ < rename_selB_) {
+                rename_buf_.erase(rename_selA_, rename_selB_ - rename_selA_);
+                rename_caret_ = rename_selA_; rename_selA_ = rename_selB_ = 0;
+            } else if (rename_caret_ < (int)rename_buf_.size()) {
+                rename_buf_.erase(rename_caret_, 1);
+            }
+            break;
+        case VK_RETURN: CommitRename(); return true;
+        case VK_ESCAPE: CancelRename(); return true;
+        default: return true;  // 编辑期吞掉其他键
+        }
+        RedrawBox(rename_box_);
+        return true;
+    }
+    return true;  // 编辑期其他消息一律吞掉
+}
+
 void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
     hwnd_ = hwnd;
     x += bbox_.left;  // 客户区 → grid 坐标（矩形/命中都在 grid 空间）
     y += bbox_.top;
+    if (msg == WM_LBUTTONDOWN && renaming_)
+        CommitRename();  // 编辑中点击别处 → 提交
     int b = BoxAtGrid(x, y);
     switch (msg) {
     case WM_MOUSEMOVE: {
@@ -445,13 +553,11 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
                 if (moved && on_moved_) on_moved_(true);
                 break;
             }
-            if (!moved) {  // 未位移的头栏单击 → 折叠并持久化
+            if (!moved) {  // 未位移的头栏单击 → 延时折叠（与双击改名判别）
                 StageTrace("d:up click-header");
                 if (drag_on_header_) {
-                    boxes_[bd].collapsed = !boxes_[bd].collapsed;
-                    Relayout();
-                    RedrawBox(bd);
-                    if (on_moved_) on_moved_(false);
+                    collapse_pending_ = bd;
+                    SetTimer(hwnd, kCollapseTimer, GetDoubleClickTime(), nullptr);
                 }
                 break;
             }
@@ -486,9 +592,14 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
         break;
     }
     case WM_LBUTTONDBLCLK: {
+        KillTimer(hwnd, kCollapseTimer);  // 双击：取消待折叠
+        collapse_pending_ = -1;
         if (b >= 0) {
             int row = RowIndexAt(boxes_[b], x, y);
-            if (row >= 0) OpenFile(boxes_[b].files[row]);
+            if (row >= 0)
+                OpenFile(boxes_[b].files[row]);        // 双击文件行 → 打开
+            else if (row == -2)
+                StartRename(b);                        // 双击格头 → 就地改名
         }
         break;
     }
@@ -518,6 +629,18 @@ void DesktopGrid::AnimateIn(HWND hwnd) {
 }
 
 void DesktopGrid::OnTimer(HWND hwnd, UINT id) {
+    if (id == kCollapseTimer) {  // 单击格头延时折叠（双击则取消并改名）
+        KillTimer(hwnd, kCollapseTimer);
+        if (collapse_pending_ >= 0) {
+            int p = collapse_pending_;
+            collapse_pending_ = -1;
+            boxes_[p].collapsed = !boxes_[p].collapsed;
+            Relayout();
+            RedrawBox(p);
+            if (on_moved_) on_moved_(false);
+        }
+        return;
+    }
     if (id < kTimerBase || id >= kTimerBase + kBoxCount) return;
     KillTimer(hwnd, id);
     Box& b = boxes_[id - kTimerBase];

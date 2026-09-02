@@ -167,6 +167,7 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
         grid.OnTimer(h, id);
     });
     win.OnMouse([&](UINT msg, float x, float y) { grid.OnMouse(win.hwnd(), msg, x, y); });
+    win.OnKeyboard([&](UINT msg, UINT wp) { return grid.OnKeyboard(msg, wp); });
     win.OnHitTest([&](float x, float y) {
         // 全窗 HTCLIENT：OLE 拖放周期性用 WM_NCHITTEST 复验目标，HTTRANSPARENT
         // 会让复验转投图标层导致拖放丢失（实测）。窗口紧贴格子内容，空白仅

@@ -107,7 +107,16 @@ LRESULT GlassWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         return 0;
     case WM_KEYDOWN:
+        if (self && self->on_keyboard_ && self->on_keyboard_(WM_KEYDOWN, static_cast<UINT>(wp)))
+            return 0;
         if (wp == VK_ESCAPE) DestroyWindow(hwnd);
+        return 0;
+    case WM_CHAR:
+        if (self && self->on_keyboard_ && self->on_keyboard_(WM_CHAR, static_cast<UINT>(wp)))
+            return 0;
+        return 0;
+    case WM_KILLFOCUS:
+        if (self && self->on_keyboard_) self->on_keyboard_(WM_KILLFOCUS, 0);
         return 0;
     case WM_HOTKEY:
         if (self && self->on_key_) self->on_key_(static_cast<UINT>(wp));

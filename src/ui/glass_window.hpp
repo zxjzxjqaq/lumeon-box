@@ -28,6 +28,8 @@ public:
     void OnMouse(std::function<void(UINT msg, float x, float y)> cb) { on_mouse_ = std::move(cb); }
     // WM_APP 区段消息透传（托盘回调等），返回值作为 WndProc 结果
     void OnApp(std::function<LRESULT(UINT msg, WPARAM wp, LPARAM lp)> cb) { on_app_ = std::move(cb); }
+    // 键盘输入（WM_CHAR/WM_KEYDOWN/WM_KILLFOCUS）→ 就地重命名等；返回 true 表示已处理
+    void OnKeyboard(std::function<bool(UINT msg, UINT wp)> cb) { on_keyboard_ = std::move(cb); }
     // WM_NCHITTEST 委托：返回 HTTRANSPARENT 穿透 / HTCLIENT 交互（贴桌模式必须穿透空白区）
     void OnHitTest(std::function<int(float x, float y)> cb) { on_hittest_ = std::move(cb); }
 
@@ -42,6 +44,7 @@ private:
     std::function<void(HWND, UINT)> on_timer_;
     std::function<void(UINT, float, float)> on_mouse_;
     std::function<LRESULT(UINT, WPARAM, LPARAM)> on_app_;
+    std::function<bool(UINT, UINT)> on_keyboard_;
     std::function<int(float, float)> on_hittest_;
     float dpi_ = 96.f;
     GraphicsContext gfx_;
