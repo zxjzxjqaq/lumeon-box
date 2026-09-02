@@ -48,6 +48,7 @@ void BuildCard(Gdiplus::GraphicsPath& p, float x, float y, float w, float h, flo
 
 void Calendar::Open(HWND owner, int y, int m, int d, int px, int py) {
     EnsureGdip();
+    scale_ = GetDpiForSystem() / 96.f;  // 按显示 DPI 缩放，避免高分辨率下发虚
     if (!hwnd_) {
         WNDCLASSW wc{};
         wc.lpfnWndProc = &WndProc;
@@ -56,9 +57,10 @@ void Calendar::Open(HWND owner, int y, int m, int d, int px, int py) {
         wc.lpszClassName = L"LumenBoxCalendar";
         wc.hbrBackground = nullptr;
         RegisterClassW(&wc);
+        int w = (int)(kW * scale_), h = (int)(kH * scale_);
         hwnd_ = CreateWindowExW(WS_EX_TOOLWINDOW, wc.lpszClassName, L"选择日期",
-                                WS_POPUP, px, py, kW, kH, owner, nullptr, wc.hInstance, this);
-        HRGN rgn = CreateRoundRectRgn(0, 0, kW, kH, 24, 24);
+                                WS_POPUP, px, py, w, h, owner, nullptr, wc.hInstance, this);
+        HRGN rgn = CreateRoundRectRgn(0, 0, w, h, (int)(24 * scale_), (int)(24 * scale_));
         SetWindowRgn(hwnd_, rgn, TRUE);
     }
     // 夹回工作区
@@ -100,7 +102,8 @@ LRESULT CALLBACK Calendar::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         break;
     case WM_LBUTTONDOWN: {
         if (!self) return 0;
-        int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);  // 客户区坐标
+        float s = self->scale_ ? self->scale_ : 1.f;
+        int x = (int)(GET_X_LPARAM(lp) / s), y = (int)(GET_Y_LPARAM(lp) / s);  // 逻辑坐标
         // 头栏 ◀ / ▶
         if (y >= kPad && y < kPad + kHeaderH) {
             if (x >= kPad && x <= kPad + 34) {  // 上个月
@@ -154,6 +157,7 @@ LRESULT CALLBACK Calendar::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             Gdiplus::Graphics g(hdc);
             g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
             g.SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAlias);
+            if (self) g.ScaleTransform(self->scale_, self->scale_);  // 逻辑 → 物理（高 DPI 清晰）
             Gdiplus::GraphicsPath path;
             BuildCard(path, 0.5f, 0.5f, (float)kW - 1.f, (float)kH - 1.f, 12.f);
             Gdiplus::SolidBrush fill(Gdiplus::Color(0x0B, 0x0E, 0x14));

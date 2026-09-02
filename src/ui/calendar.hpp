@@ -17,6 +17,7 @@ public:
 private:
     static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
     HWND hwnd_ = nullptr;
+    float scale_ = 1.f;  // 显示器 DPI 缩放（窗口/绘制/命中统一放大，防模糊）
     int viewY_ = 0, viewM_ = 0;   // 显示年月
     int selY_ = 0, selM_ = 0, selD_ = 0;  // 当前选中日期
     std::function<void(int, int, int)> on_pick_;
