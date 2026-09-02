@@ -11,14 +11,21 @@ struct Ctx {
 };
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    if (msg == WM_NCCREATE) {
+        auto* cs = reinterpret_cast<CREATESTRUCTW*>(lp);
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA,
+                          reinterpret_cast<LONG_PTR>(cs->lpCreateParams));  // 绑定 Ctx
+        return TRUE;
+    }
     auto* ctx = reinterpret_cast<Ctx*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
     switch (msg) {
     case WM_COMMAND:
         if (LOWORD(wp) == kIDOK) {
             HWND edit = GetDlgItem(hwnd, 101);
             int len = GetWindowTextLengthW(edit);
-            std::wstring t(len, L'\0');
+            std::wstring t(len + 1, L'\0');
             GetWindowTextW(edit, t.data(), len + 1);
+            t.resize(len);
             if (ctx) ctx->value = std::move(t);
             if (ctx) ctx->done = true;
             DestroyWindow(hwnd);
@@ -98,9 +105,11 @@ std::wstring InputBox(HWND owner, const wchar_t* title, const wchar_t* initial) 
         }
         if (ctx.done) break;
     }
-    DestroyWindow(hwnd);
-    if (owner) EnableWindow(owner, TRUE);
-    SetForegroundWindow(owner ? owner : hwnd);
+    if (IsWindow(hwnd)) DestroyWindow(hwnd);
+    if (owner) {
+        EnableWindow(owner, TRUE);
+        SetForegroundWindow(owner);
+    }
     return std::move(ctx.value);
 }
 
