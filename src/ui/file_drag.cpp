@@ -124,7 +124,8 @@ public:
 
 private:
     HGLOBAL BuildHdrop() const {
-        SIZE_T bytes = sizeof(DROPFILES) + (path_.size() + 1) * sizeof(wchar_t);
+        // CF_HDROP 要求文件列表为“双空字符结尾”（路径\0\0），否则目标可能不承接
+        SIZE_T bytes = sizeof(DROPFILES) + (path_.size() + 2) * sizeof(wchar_t);
         HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, bytes);
         if (!h) return nullptr;
         void* p = GlobalLock(h);
@@ -137,7 +138,7 @@ private:
         df.fWide = TRUE;
         std::memcpy(p, &df, sizeof(df));
         std::memcpy(reinterpret_cast<char*>(p) + sizeof(df), path_.c_str(),
-                     (path_.size() + 1) * sizeof(wchar_t));
+                     (path_.size() + 1) * sizeof(wchar_t));  // 路径 + 单个空；第二个空由 ZEROINIT 提供
         GlobalUnlock(h);
         return h;
     }

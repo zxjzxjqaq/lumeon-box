@@ -584,12 +584,7 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
             if (on_moved_) on_moved_(false);
             break;
         }
-        if (b >= 0 && RowIndexAt(boxes_[b], x, y) == -2) {  // 头栏点击 = 折叠
-            boxes_[b].collapsed = !boxes_[b].collapsed;
-            Relayout();
-            RedrawBox(b);
-        }
-        break;
+        break;  // 其余 UP（含双击第二次 UP）不折叠：折叠仅走延时定时器
     }
     case WM_LBUTTONDBLCLK: {
         KillTimer(hwnd, kCollapseTimer);  // 双击：取消待折叠
