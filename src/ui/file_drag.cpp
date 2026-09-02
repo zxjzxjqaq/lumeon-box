@@ -66,20 +66,29 @@ public:
         }
         return ref_;
     }
-    HRESULT STDMETHODCALLTYPE Next(ULONG celt, FORMATETC* out, ULONG* fetched) override {
-        if (!out || celt < 1) return S_FALSE;
-        FORMATETC fe{};
-        fe.cfFormat = CF_HDROP;
-        fe.ptd = nullptr;
-        fe.dwAspect = DVASPECT_CONTENT;
-        fe.lindex = -1;
-        fe.tymed = TYMED_HGLOBAL;
-        out[0] = fe;
-        if (fetched) *fetched = 1;
-        return S_OK;
+    HRESULT STDMETHODCALLTYPE Next(ULONG celt, FORMATETC* fmt, ULONG* fetched) override {
+        if (!fmt) return E_POINTER;
+        ULONG n = 0;
+        if (index_ == 0 && celt >= 1) {  // 只通告 1 项：CF_HDROP；返回后即耗尽
+            FORMATETC fe{};
+            fe.cfFormat = CF_HDROP;
+            fe.ptd = nullptr;
+            fe.dwAspect = DVASPECT_CONTENT;
+            fe.lindex = -1;
+            fe.tymed = TYMED_HGLOBAL;
+            fmt[0] = fe;
+            n = 1;
+            index_ = 1;
+        }
+        if (fetched) *fetched = n;
+        return n > 0 ? S_OK : S_FALSE;  // 必须有 S_FALSE，否则目标会无限枚举
     }
-    HRESULT STDMETHODCALLTYPE Skip(ULONG) override { return S_FALSE; }
-    HRESULT STDMETHODCALLTYPE Reset() override { return S_OK; }
+    HRESULT STDMETHODCALLTYPE Skip(ULONG celt) override {
+        if (celt == 0) return S_OK;
+        index_ = 1;  // 唯一一项被跳过 → 耗尽
+        return S_FALSE;
+    }
+    HRESULT STDMETHODCALLTYPE Reset() override { index_ = 0; return S_OK; }
     HRESULT STDMETHODCALLTYPE Clone(IEnumFORMATETC** out) override {
         if (!out) return E_POINTER;
         *out = new HdropFormatEnum();
@@ -88,6 +97,7 @@ public:
 
 private:
     ULONG ref_ = 1;
+    ULONG index_ = 0;  // 已枚举项数（0/1），超过即 S_FALSE
 };
 
 // 数据对象：提供 CF_HDROP（单个文件路径 + 结尾双空字符）
