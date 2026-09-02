@@ -455,7 +455,7 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
                 pending_file_.clear();
                 dragging_ = false;
                 box_drag_ = -1;
-                StartFileDrag(p);  // 拖到桌面/资源管理器/其他格
+                StartFileDrag(hwnd, p);  // 拖到桌面/资源管理器/其他格
                 Refresh();                // 放置后重新列格，纳入桌面/跨盒移动
             }
             return;
@@ -553,11 +553,16 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
                 if (moved && on_moved_) on_moved_(true);
                 break;
             }
-            if (!moved) {  // 未位移的头栏单击 → 延时折叠（与双击改名判别）
+            if (!moved) {  // 未位移的头栏单击 → 立即折叠（双击紧随会撤销）
                 StageTrace("d:up click-header");
                 if (drag_on_header_) {
-                    collapse_pending_ = bd;
-                    SetTimer(hwnd, kCollapseTimer, GetDoubleClickTime(), nullptr);
+                    bool prev = boxes_[bd].collapsed;
+                    boxes_[bd].collapsed = !prev;   // 立即响应，无延时
+                    collapse_undo_box_ = bd;
+                    collapse_undo_prev_ = prev;     // 供随后的双击撤销
+                    Relayout();
+                    RedrawBox(bd);
+                    if (on_moved_) on_moved_(false);
                 }
                 break;
             }
@@ -587,14 +592,19 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
         break;  // 其余 UP（含双击第二次 UP）不折叠：折叠仅走延时定时器
     }
     case WM_LBUTTONDBLCLK: {
-        KillTimer(hwnd, kCollapseTimer);  // 双击：取消待折叠
-        collapse_pending_ = -1;
         if (b >= 0) {
             int row = RowIndexAt(boxes_[b], x, y);
-            if (row >= 0)
+            if (row == -2) {  // 双击格头：撤销单击的折叠，进入就地改名
+                if (collapse_undo_box_ == b) {
+                    boxes_[b].collapsed = collapse_undo_prev_;
+                    collapse_undo_box_ = -1;
+                    Relayout();
+                    RedrawBox(b);
+                }
+                StartRename(b);
+            } else if (row >= 0) {
                 OpenFile(boxes_[b].files[row]);        // 双击文件行 → 打开
-            else if (row == -2)
-                StartRename(b);                        // 双击格头 → 就地改名
+            }
         }
         break;
     }
@@ -624,18 +634,6 @@ void DesktopGrid::AnimateIn(HWND hwnd) {
 }
 
 void DesktopGrid::OnTimer(HWND hwnd, UINT id) {
-    if (id == kCollapseTimer) {  // 单击格头延时折叠（双击则取消并改名）
-        KillTimer(hwnd, kCollapseTimer);
-        if (collapse_pending_ >= 0) {
-            int p = collapse_pending_;
-            collapse_pending_ = -1;
-            boxes_[p].collapsed = !boxes_[p].collapsed;
-            Relayout();
-            RedrawBox(p);
-            if (on_moved_) on_moved_(false);
-        }
-        return;
-    }
     if (id < kTimerBase || id >= kTimerBase + kBoxCount) return;
     KillTimer(hwnd, id);
     Box& b = boxes_[id - kTimerBase];

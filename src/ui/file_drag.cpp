@@ -44,6 +44,52 @@ private:
     ULONG ref_;
 };
 
+// 枚举 CF_HDROP：多数 shell 放置目标会先 EnumFormatEtc 确认可用格式，
+// 原实现返回 E_NOTIMPL 可能被判定为空数据对象而拒绝承接。
+class HdropFormatEnum : public IEnumFORMATETC {
+public:
+    HdropFormatEnum() = default;
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** out) override {
+        if (riid == IID_IUnknown || riid == IID_IEnumFORMATETC) {
+            *out = static_cast<IEnumFORMATETC*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *out = nullptr;
+        return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return ++ref_; }
+    ULONG STDMETHODCALLTYPE Release() override {
+        if (--ref_ == 0) {
+            delete this;
+            return 0;
+        }
+        return ref_;
+    }
+    HRESULT STDMETHODCALLTYPE Next(ULONG celt, FORMATETC* out, ULONG* fetched) override {
+        if (!out || celt < 1) return S_FALSE;
+        FORMATETC fe{};
+        fe.cfFormat = CF_HDROP;
+        fe.ptd = nullptr;
+        fe.dwAspect = DVASPECT_CONTENT;
+        fe.lindex = -1;
+        fe.tymed = TYMED_HGLOBAL;
+        out[0] = fe;
+        if (fetched) *fetched = 1;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE Skip(ULONG) override { return S_FALSE; }
+    HRESULT STDMETHODCALLTYPE Reset() override { return S_OK; }
+    HRESULT STDMETHODCALLTYPE Clone(IEnumFORMATETC** out) override {
+        if (!out) return E_POINTER;
+        *out = new HdropFormatEnum();
+        return S_OK;
+    }
+
+private:
+    ULONG ref_ = 1;
+};
+
 // 数据对象：提供 CF_HDROP（单个文件路径 + 结尾双空字符）
 class FileData : public IDataObject {
 public:
@@ -108,9 +154,12 @@ public:
     HRESULT STDMETHODCALLTYPE SetData(FORMATETC*, STGMEDIUM*, BOOL) override {
         return E_NOTIMPL;
     }
-    HRESULT STDMETHODCALLTYPE EnumFormatEtc(DWORD, IEnumFORMATETC** out) override {
-        if (out) *out = nullptr;
-        return E_NOTIMPL;
+    HRESULT STDMETHODCALLTYPE EnumFormatEtc(DWORD dir, IEnumFORMATETC** out) override {
+        if (!out) return E_POINTER;
+        *out = nullptr;
+        if (dir != DATADIR_GET) return E_NOTIMPL;
+        *out = new HdropFormatEnum();
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE DAdvise(FORMATETC*, DWORD, IAdviseSink*, DWORD* conn) override {
         if (conn) *conn = 0;
@@ -149,12 +198,13 @@ private:
 
 }  // namespace
 
-DWORD StartFileDrag(const std::wstring& path) {
+DWORD StartFileDrag(HWND hwnd, const std::wstring& path) {
     if (path.empty()) return DROPEFFECT_NONE;
     auto* data = new FileData(path);
     auto* src = new DropSource();
     DWORD effect = DROPEFFECT_NONE;
-    DoDragDrop(data, src, DROPEFFECT_MOVE | DROPEFFECT_COPY, &effect);
+    // SHDoDragDrop：shell 优化的拖放，带系统拖图，对资源管理器/桌面目标更可靠
+    SHDoDragDrop(hwnd, data, src, DROPEFFECT_MOVE | DROPEFFECT_COPY, &effect);
     data->Release();  // 释放我方引用（DoDragDrop 内部已平衡引用）
     src->Release();
     return effect;
