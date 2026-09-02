@@ -17,11 +17,6 @@
 namespace lb {
 namespace fs = std::filesystem;
 
-static std::wstring Ellipsize(const std::wstring& s, size_t maxChars) {
-    if (s.size() <= maxChars) return s;
-    return s.substr(0, maxChars - 1) + L"…";
-}
-
 // —— 日程格：格里高利历日期工具（跨月/跨年安全）——
 struct ADate {
     int y, m, d;
@@ -79,6 +74,9 @@ bool DesktopGrid::Init(GraphicsContext& gfx, ComPtr<IDCompositionVisual> root, f
     dwrite_->CreateTextFormat(L"Microsoft YaHei UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL,
                               DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.5f,
                               L"zh-cn", rowFmt_.GetAddressOf());
+    // 关掉换行：文本超出行宽时不再折行溢到下一行（配合按像素宽截断的 … 省略）
+    headerFmt_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+    rowFmt_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
 
     const Category cats[kBoxCount] = {Category::Doc, Category::Image, Category::Video,
                                       Category::Audio, Category::Archive,
@@ -319,7 +317,7 @@ void DesktopGrid::RedrawBox(int i) {
                     int idx = b.scroll + (int)r;
                     if (idx < 0 || idx >= (int)b.files.size()) break;
                     std::wstring name =
-                        Ellipsize(fs::path(b.files[idx]).filename().wstring(), 19);
+                        EllipsizeW(fs::path(b.files[idx]).filename().wstring(), w - 12.f - 36.f - 2.f);
                     float y = kHeaderH + kPad * 0.4f + static_cast<float>(r) * kRowH;
                     if (auto* icon = icons_.Get(ctx, b.files[idx])) {
                         ctx->DrawBitmap(icon, D2D1::RectF(14.f, y + 3.f, 30.f, y + 19.f), 1.f,
@@ -328,11 +326,12 @@ void DesktopGrid::RedrawBox(int i) {
                     ctx->DrawText(name.c_str(), (UINT32)name.size(), rowFmt_.Get(),
                                   {36.f, y, w - 12.f, y + kRowH + 3.f}, text.Get());
                 }
-                // 超出上限 → 滚动条（滚轮滚动，不再裁切）
+                // 超出上限 → 滚动条（仅滚动时显示）
                 if (b.files.size() > kMaxRows)
                     DrawScroll(ctx, w, kHeaderH + kPad * 0.4f,
                                kHeaderH + kPad * 0.4f + rows * kRowH, (int)rows,
-                               (int)b.files.size(), b.scroll, hl.Get(), dim.Get());
+                               (int)b.files.size(), b.scroll, hl.Get(), dim.Get(),
+                               scrollbar_visible_ && scrollbar_box_ == i);
             }
         }
     });
@@ -382,7 +381,7 @@ void DesktopGrid::DrawTasksBox(::ID2D1DeviceContext* ctx, int ti, float w, float
             ctx->DrawRoundedRectangle(cb, hl.Get(), 1.f);
         }
         // 事项文本
-        std::wstring nm = Ellipsize(tk.text, 18);
+        std::wstring nm = EllipsizeW(tk.text, w - 10.f - 36.f - 2.f);
         auto* br = tk.done ? dim.Get() : text.Get();
         if (tasks_editing_ && task_edit_box_ == ti && task_edit_row_ == idx) {
             D2D1_RECT_F tr{36.f, ry, w - 10.f, ry + kRowH};
@@ -427,14 +426,16 @@ void DesktopGrid::DrawTasksBox(::ID2D1DeviceContext* ctx, int ti, float w, float
         ctx->DrawText(addHint.c_str(), (UINT32)addHint.size(), rowFmt_.Get(),
                       {14.f, ay, w - 10.f, ay + kRowH + 3.f}, dim.Get());
     }
-    // 事项超出上限 → 滚动条
+    // 事项超出上限 → 滚动条（仅滚动时显示）
     if (lst && lst->size() > kMaxRows)
         DrawScroll(ctx, w, y0, ay, (int)shown, (int)lst->size(), boxes_[ti].scroll, hl.Get(),
-                   dim.Get());
+                   dim.Get(), scrollbar_visible_ && scrollbar_box_ == ti);
 }
 
 void DesktopGrid::DrawScroll(ID2D1DeviceContext* ctx, float w, float y0, float y1, int shown,
-                             int total, int scroll, ID2D1Brush* track, ID2D1Brush* thumb) const {
+                             int total, int scroll, ID2D1Brush* track, ID2D1Brush* thumb,
+                             bool show) const {
+    if (!show) return;  // 仅滚动时显示
     if (total <= shown) return;
     float trackH = y1 - y0;
     if (trackH <= 0) return;
@@ -731,6 +732,18 @@ float DesktopGrid::RowTextWidth(const std::wstring& s) const {
     DWRITE_TEXT_METRICS m{};
     lay->GetMetrics(&m);
     return m.widthIncludingTrailingWhitespace;
+}
+
+std::wstring DesktopGrid::EllipsizeW(const std::wstring& s, float maxW) const {
+    if (s.empty()) return s;
+    if (RowTextWidth(s) <= maxW) return s;
+    std::wstring tail = L"\u2026";  // …
+    size_t n = s.size();
+    while (n > 0) {
+        std::wstring cut = s.substr(0, --n) + tail;
+        if (RowTextWidth(cut) <= maxW) return cut;
+    }
+    return tail;
 }
 
 void DesktopGrid::StartRename(int boxIdx) {
@@ -1195,6 +1208,10 @@ void DesktopGrid::OnWheel(int delta, float x, float y) {
     bx.scroll -= (delta / 120) * 2;  // 每格滚 2 行；上滚(正值)向开头，下滚(负值)向末尾
     if (bx.scroll < 0) bx.scroll = 0;
     if (bx.scroll > maxScroll) bx.scroll = maxScroll;
+    // 滚动时显示滚动条，停止 1100ms 后淡出
+    scrollbar_visible_ = true;
+    scrollbar_box_ = b;
+    SetTimer(hwnd_, kScrollbarFade, 1100, nullptr);
     RedrawBox(b);
 }
 
@@ -1209,6 +1226,12 @@ void DesktopGrid::OnTimer(HWND hwnd, UINT id) {
         caret_on_ = !caret_on_;
         if (renaming_) RedrawBox(rename_box_);
         else if (tasks_editing_) RedrawBox(task_edit_box_);
+        return;
+    }
+    if (id == kScrollbarFade) {  // 停止滚动 1100ms 后隐藏滚动条
+        KillTimer(hwnd, kScrollbarFade);
+        scrollbar_visible_ = false;
+        if (scrollbar_box_ >= 0) RedrawBox(scrollbar_box_);
         return;
     }
     if (id == kCollapseTimer) {  // 单击格头延时折叠（双击则取消并改名，避免闪烁）

@@ -27,6 +27,7 @@ public:
     static constexpr UINT kTimerBase = 200;    // AnimateIn 逐格定时器
     static constexpr UINT kCollapseTimer = 300;   // 单击格头折叠延时(约250ms)
     static constexpr UINT kCaretTimer = 310;   // 编辑光标闪烁(530ms)
+    static constexpr UINT kScrollbarFade = 320; // 滚动条滚动后淡出(1100ms)
     static constexpr UINT kCollapseDelay = 250;   // ms
     static constexpr UINT kCaretBlink = 530;   // ms
 
@@ -115,13 +116,15 @@ private:
     void Relayout();             // 计算 bbox 并更新视觉偏移；定位回调/自定位
     void RedrawBox(int i);
     void DrawScroll(::ID2D1DeviceContext* ctx, float w, float y0, float y1, int shown,
-                    int total, int scroll, ::ID2D1Brush* track, ::ID2D1Brush* thumb) const;
+                    int total, int scroll, ::ID2D1Brush* track, ::ID2D1Brush* thumb,
+                    bool show) const;
     void ClampScroll(Box& b);                    // 按内容量裁剪滚动偏移
     int RowIndexAt(const Box& b, float x, float y) const;   // -1=无  -2=头栏
     void OpenFile(const std::wstring& path) const;
     void RowMenu(HWND hwnd, int boxIdx, const std::wstring& path);  // 行右键：打开/位置/放回
     void HeaderMenu(HWND hwnd, int boxIdx);                 // 头栏右键：重命名/清空
     std::wstring DisplayName(Category c) const;             // 自定义名或默认类目名
+    std::wstring EllipsizeW(const std::wstring& s, float maxW) const;  // 按像素宽度截断+省略号
     void StartRename(int boxIdx);     // 双击格头 → 就地编辑该格名
     void CommitRename();              // 提交编辑（回车/点击别处/失焦）
     void CancelRename();              // 取消（Esc）
@@ -156,6 +159,8 @@ private:
     int rename_caret_ = 0;
     int rename_selA_ = 0, rename_selB_ = 0;   // 选中区间（selA<selB 时有选中）
     bool caret_on_ = true;                    // 编辑光标闪烁
+    bool scrollbar_visible_ = false;          // 滚动条仅在滚动时显示
+    int scrollbar_box_ = -1;                  // 正在显示滚动条的格
     int collapse_pending_ = -1;               // 延时折叠中的格（双击则取消并改名）
     // 日程格（左上「文档」格）：当前选中日期 + 任务数据 + 就地编辑态
     int curY_ = 0, curM_ = 0, curD_ = 0;      // 当前选中日期（未初始化=今天）
