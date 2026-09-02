@@ -1,5 +1,6 @@
 #include "core/organizer.hpp"
 #include <filesystem>
+#include <shlobj.h>
 #include "core/classifier.hpp"
 #include "core/strutil.hpp"
 
@@ -10,6 +11,14 @@ static bool IsHiddenOrSystem(const fs::path& p) {
     DWORD a = GetFileAttributesW(p.c_str());
     return a != INVALID_FILE_ATTRIBUTES &&
            (a & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM));
+}
+
+// 移动文件后通知资源管理器刷新源/目标目录，避免桌面图标残留约 2 秒才消失
+static void NotifyShellMove(const std::wstring& from, const std::wstring& to) {
+    std::wstring dfrom = fs::path(from).parent_path().wstring();
+    std::wstring dto = fs::path(to).parent_path().wstring();
+    SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_PATHW, dfrom.c_str(), nullptr);
+    SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_PATHW, dto.c_str(), nullptr);
 }
 
 Organizer::Organizer(std::wstring desktopDir, const RuleSet& rules, Journal& jr)
@@ -38,6 +47,7 @@ bool Organizer::MoveOne(const std::wstring& src, Category c) {
     std::wstring dst = UniqueTarget(dir + L"\\" + fs::path(src).filename().wstring());
     if (!MoveFileExW(src.c_str(), dst.c_str(), MOVEFILE_COPY_ALLOWED)) return false;
     jr_.LogMove({src, dst});
+    NotifyShellMove(src, dst);
     return true;
 }
 
@@ -96,6 +106,7 @@ bool Organizer::MoveBackToDesktop(const std::wstring& path) {
     std::wstring dst = UniqueTarget((fs::path(desktop_) / p.filename()).wstring());
     if (!MoveFileExW(p.c_str(), dst.c_str(), MOVEFILE_COPY_ALLOWED)) return false;
     jr_.LogMove({p.wstring(), dst});
+    NotifyShellMove(p.wstring(), dst);
     return true;
 }
 
