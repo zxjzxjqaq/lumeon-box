@@ -125,6 +125,44 @@ std::vector<std::wstring> Organizer::FilesIn(Category c) const {
     return out;
 }
 
+std::wstring Organizer::FolderDir(const std::wstring& folder) const {
+    return container_ + L"\\" + folder;
+}
+
+std::vector<std::wstring> Organizer::FilesInFolder(const std::wstring& folder) const {
+    std::vector<std::wstring> out;
+    std::error_code ec;
+    for (fs::directory_iterator it(FolderDir(folder), fs::directory_options::skip_permission_denied, ec),
+         end;
+         !ec && it != end; it.increment(ec)) {
+        if (!it->is_directory(ec)) out.push_back(it->path().wstring());
+    }
+    return out;
+}
+
+bool Organizer::MoveToFolder(const std::wstring& path, const std::wstring& folder) {
+    std::error_code ec;
+    if (!fs::exists(path, ec) || fs::is_directory(path, ec)) return false;
+    std::wstring dir = FolderDir(folder);
+    std::wstring parent = fs::path(path).parent_path().wstring();
+    if (_wcsicmp(parent.c_str(), dir.c_str()) == 0) return false;  // 已在同盒不产生副本
+    fs::create_directories(dir, ec);
+    std::wstring dst = UniqueTarget(dir + L"\\" + fs::path(path).filename().wstring());
+    if (!MoveFileExW(path.c_str(), dst.c_str(), MOVEFILE_COPY_ALLOWED)) return false;
+    jr_.LogMove({path, dst});
+    NotifyShellMove(path, dst);
+    return true;
+}
+
+std::wstring Organizer::MakeFolder(const std::wstring& base) {
+    std::error_code ec;
+    std::wstring cand = base;
+    for (int i = 2; fs::exists(FolderDir(cand), ec); ++i)
+        cand = base + L"_" + std::to_wstring(i);
+    fs::create_directories(FolderDir(cand), ec);
+    return cand;
+}
+
 bool Organizer::UndoLast() {
     auto batches = jr_.Batches();
     if (batches.empty()) return false;

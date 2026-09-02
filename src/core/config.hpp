@@ -6,22 +6,30 @@
 
 namespace lb {
 
+// 一个容器/格子：用户可自建。盒子=容器根下 <folder> 子文件夹；待办盒特殊（无文件）。
+struct BoxDef {
+    std::string id;      // 稳定唯一键：tasks / b1 / b2 ...
+    std::wstring name;   // 显示名（用户可就地重命名）
+    std::wstring folder; // 容器内子目录（data 盒为 box_bN；tasks 盒为空）
+    std::string type = "data";  // "tasks" | "data"
+    bool collapsed = false;
+};
+
 struct SpikeConfig {
     std::string mode = "independent";  // independent | desktop | bottom
     bool anchored = true;              // true=自动锚定工作区右下；false=用户手动摆放
-    // 格子槽位顺序：8 个槽位（2 行 × 4 列），值为类目键，空串 = 空槽
-    std::vector<std::string> order;
-    std::vector<std::string> collapsed;  // 折叠的类目键
+    // 容器清单（显示顺序）。缺省=待办 + 默认容器 两盒。
+    std::vector<BoxDef> boxes;
     int x = 200, y = 200;
     int w = 520, h = 320;
-    // M2：自动归类监听策略（off|prompt|auto，D4 默认提示）
-    // 用户明确不要按格式自动归类，默认改为 off；仍可在托盘手动开启
+    // M2：自动归类监听策略（off|prompt|auto；不要按格式自动归类，默认 off）
     std::string watcherMode = "off";
-    // M2：双击隐藏图标实现（hook|hotkey，D6 默认钩子 + 可切热键）
+    // M2：双击隐藏图标实现（hook|hotkey）
     std::string hideIconsMode = "hook";
-    // 每格自定义显示名（类目键 → 名称）；缺省用默认类目名
-    std::map<std::string, std::string> boxNames;
 };
+
+// 新装/无 boxes 时的默认两盒：待办 + 默认容器
+std::vector<BoxDef> DefaultBoxes();
 
 class ConfigStore {
 public:

@@ -6,11 +6,9 @@
 namespace lb {
 
 void DropTarget::SetHooks(std::function<int(const POINTL&)> boxAtScreen,
-                          std::function<Category(int)> catOf,
-                          std::function<void(const std::vector<std::wstring>&, Category)> onFiles,
+                          std::function<void(const std::vector<std::wstring>&, int)> onFiles,
                           std::function<void(int)> onDragBox) {
     box_at_ = std::move(boxAtScreen);
-    cat_of_ = std::move(catOf);
     on_files_ = std::move(onFiles);
     on_drag_box_ = std::move(onDragBox);
 }
@@ -106,8 +104,8 @@ HRESULT STDMETHODCALLTYPE DropTarget::Drop(IDataObject* obj, DWORD, POINTL pt, D
         STGMEDIUM med{};
         if (obj->GetData(&f, &med) == S_OK) {
             auto files = FilesFromHdrop(med.hGlobal);
-            // 卡片=进该格；非卡片区=放回桌面（Category::None 语义）
-            on_files_(files, box >= 0 ? cat_of_(box) : Category::None);
+            // box>=0 进该盒；-1 非卡片区 → 放回桌面（宿主决定）
+            on_files_(files, box);
             if (med.pUnkForRelease)
                 med.pUnkForRelease->Release();
             else

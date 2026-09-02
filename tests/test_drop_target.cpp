@@ -107,7 +107,7 @@ TEST_CASE("HDROP 提取文件列表", "[drop]") {
     REQUIRE(files[1] == L"C:\\bb.png");
 }
 
-TEST_CASE("拖拽归位：命中格子才移动并回报类目", "[drop]") {
+TEST_CASE("拖拽归位：命中盒子才移动并回报箱子", "[drop]") {
     Desk d;
     Journal jr((fs::temp_directory_path() / L"lumenbox_tests" / L"drop.jsonl").wstring());
     RuleSet rules;
@@ -116,18 +116,15 @@ TEST_CASE("拖拽归位：命中格子才移动并回报类目", "[drop]") {
     std::ofstream(d.dir / L"pic.jpg") << 'x';
 
     std::vector<std::wstring> got;
-    Category gotCat = Category::None;
     int lastDragBox = -99;
     DropTarget dt;
     dt.SetHooks(
         [](const POINTL& pt) { return (pt.x < 100 && pt.y < 100) ? 3 : -1; },
-        [](int box) { return box == 3 ? Category::Audio : Category::None; },
-        [&](const std::vector<std::wstring>& files, Category c) {
-            gotCat = c;
+        [&](const std::vector<std::wstring>& files, int box) {
             for (auto& f : files) {
-                if (c == Category::None) {
+                if (box < 0) {
                     if (org.MoveBackToDesktop(f)) got.push_back(f);
-                } else if (org.MoveToCategory(f, c)) {
+                } else if (org.MoveToFolder(f, L"box_b3")) {
                     got.push_back(f);
                 }
             }
@@ -136,7 +133,7 @@ TEST_CASE("拖拽归位：命中格子才移动并回报类目", "[drop]") {
 
     FORMATETC f{CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
 
-    SECTION("命中格子") {
+    SECTION("命中盒子") {
         HANDLE h = MakeHdrop({(d.dir / L"song.mp3").wstring()});
         StubDataObject obj(h);
         POINTL pt{50, 50};
@@ -150,15 +147,14 @@ TEST_CASE("拖拽归位：命中格子才移动并回报类目", "[drop]") {
         REQUIRE(dt.Drop(&obj, 0, pt, &eff) == S_OK);
         // 块所有权随 Drop 消费，不再 GlobalFree
         REQUIRE(got.size() == 1);
-        REQUIRE(gotCat == Category::Audio);
-        REQUIRE(fs::exists(d.dir / L"LumenBox" / L"音频" / L"song.mp3"));
+        REQUIRE(fs::exists(d.dir / L"LumenBox" / L"box_b3" / L"song.mp3"));
     }
 
     SECTION("空白处拖放 = 放回桌面") {
         // 先归位到盒子，再空白处松手 → 应放回桌面根
-        REQUIRE(org.MoveToCategory((d.dir / L"pic.jpg").wstring(), Category::Doc));
-        REQUIRE(fs::exists(d.dir / L"LumenBox" / L"文档" / L"pic.jpg"));
-        HANDLE h = MakeHdrop({(d.dir / L"LumenBox" / L"文档" / L"pic.jpg").wstring()});
+        REQUIRE(org.MoveToFolder((d.dir / L"pic.jpg").wstring(), L"box_b3"));
+        REQUIRE(fs::exists(d.dir / L"LumenBox" / L"box_b3" / L"pic.jpg"));
+        HANDLE h = MakeHdrop({(d.dir / L"LumenBox" / L"box_b3" / L"pic.jpg").wstring()});
         StubDataObject obj(h);
         POINTL pt{500, 500};  // box_at 返回 -1（非卡片）
         DWORD eff = 0;
@@ -168,7 +164,7 @@ TEST_CASE("拖拽归位：命中格子才移动并回报类目", "[drop]") {
         REQUIRE(eff == DROPEFFECT_MOVE);          // 接受放置
         GlobalFree(h);
         REQUIRE(fs::exists(d.dir / L"pic.jpg"));   // 已放回桌面根
-        REQUIRE_FALSE(fs::exists(d.dir / L"LumenBox" / L"文档" / L"pic.jpg"));
+        REQUIRE_FALSE(fs::exists(d.dir / L"LumenBox" / L"box_b3" / L"pic.jpg"));
     }
 
     SECTION("非文件拖放 = 忽略") {
@@ -186,18 +182,19 @@ TEST_CASE("拖拽归位：命中格子才移动并回报类目", "[drop]") {
         DWORD eff = 0;
         dt.DragEnter(&obj, 0, pt, &eff);
         dt.Drop(&obj, 0, pt, &eff);
-        // 拖拽归位尊重用户手势：拖到哪个格就进哪类（不按扩展名重分类）
+        // 拖拽归位尊重用户手势：拖到哪个盒子就进哪个（不按扩展名重分类）
         REQUIRE(got.size() == 2);
-        REQUIRE(fs::exists(d.dir / L"LumenBox" / L"音频" / L"song.mp3"));
-        REQUIRE(fs::exists(d.dir / L"LumenBox" / L"音频" / L"pic.jpg"));
+        REQUIRE(fs::exists(d.dir / L"LumenBox" / L"box_b3" / L"song.mp3"));
+        REQUIRE(fs::exists(d.dir / L"LumenBox" / L"box_b3" / L"pic.jpg"));
     }
 }
 
 TEST_CASE("DragLeave 清除高亮，引用计数自管", "[drop]") {
     DropTarget dt;
     int lastDragBox = -99;
-    dt.SetHooks([](const POINTL&) { return 1; }, [](int) { return Category::Doc; },
-                [](const std::vector<std::wstring>&, Category) {}, [&](int b) { lastDragBox = b; });
+    dt.SetHooks([](const POINTL&) { return 1; },
+                [](const std::vector<std::wstring>&, int) {},
+                [&](int b) { lastDragBox = b; });
     HANDLE h = MakeHdrop({L"C:\\a.txt"});
     StubDataObject obj(h);
     POINTL pt{0, 0};

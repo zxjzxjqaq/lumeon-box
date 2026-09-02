@@ -13,12 +13,10 @@ namespace lb {
 // 与 UI/核心层解耦：三个钩子注入，可脱离 DComp 单测（假 IDataObject 直接调方法）。
 class DropTarget : public IDropTarget {
 public:
-    // boxAtScreen: 屏幕坐标 → 格子索引（-1 非卡片）；catOf: 格子索引 → 类目；
-    // onFiles: 归位执行（卡片→MoveToCategory；Category::None→MoveBackToDesktop 放回桌面 + 刷新）；
-    // onDragBox: 悬停格子变化高亮（-1 离开）
+    // boxAtScreen: 屏幕坐标 → 盒子下标（-1 非卡片）；onFiles: 归位执行（box=-1→放回
+    // 桌面根；box>=0→宿主决定进哪个容器；待办盒由宿主忽略）；onDragBox: 悬停盒变化高亮
     void SetHooks(std::function<int(const POINTL&)> boxAtScreen,
-                  std::function<Category(int)> catOf,
-                  std::function<void(const std::vector<std::wstring>&, Category)> onFiles,
+                  std::function<void(const std::vector<std::wstring>&, int box)> onFiles,
                   std::function<void(int)> onDragBox);
     void SetWindow(HWND hwnd) { hwnd_ = hwnd; }
 
@@ -46,8 +44,7 @@ private:
     int drag_box_ = -1;
     HWND hwnd_ = nullptr;
     std::function<int(const POINTL&)> box_at_;
-    std::function<Category(int)> cat_of_;
-    std::function<void(const std::vector<std::wstring>&, Category)> on_files_;
+    std::function<void(const std::vector<std::wstring>&, int)> on_files_;
     std::function<void(int)> on_drag_box_;
 };
 

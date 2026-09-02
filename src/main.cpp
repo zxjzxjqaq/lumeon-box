@@ -66,13 +66,18 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
     Spotlight spot;
     spot.SetApps(&appIndex);
     spot.SetFilesFn([&]() -> std::vector<std::wstring> {
-        // 只搜「容器内」的文件：%APPDATA%\LumenBox\＜类目＞\ 下所有文件
+        // 只搜「容器内」的文件：各数据容器文件夹（跳过待办盒与根目录 config/tasks）
         std::vector<std::wstring> out;
         std::error_code ec;
-        const std::wstring root = boxRoot;  // %APPDATA%\LumenBox
-        if (!fs::exists(root, ec)) return out;
-        for (fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec); !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
-            if (!it->is_directory(ec)) out.push_back(it->path().wstring());
+        int n = grid.BoxCount();
+        for (int i = 0; i < n; ++i) {
+            if (grid.IsTasksAt(i)) continue;
+            std::wstring folder = grid.FolderAt(i);
+            if (folder.empty()) continue;
+            std::wstring dir = org.FolderDir(folder);
+            for (fs::directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec), end;
+                 !ec && it != end; it.increment(ec))
+                if (!it->is_directory(ec)) out.push_back(it->path().wstring());
         }
         return out;
     });
@@ -173,9 +178,9 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
 
     grid.SetOrg(&org);
     grid.Init(win.gfx(), win.Root(), win.DpiScale());
-    grid.SetSlots(cfg.order, cfg.collapsed);
+    grid.SetBoxes(cfg.boxes);
     grid.SetWindowHandle(win.hwnd());
-    grid.SetTasksFile(appData + L"\\tasks.json");  // 日程格数据（左上「文档」格）
+    grid.SetTasksFile(appData + L"\\tasks.json");  // 日程格数据（待办盒）
     grid.SetOnExtent([&](float w, float h) {
         RECT work{};
         SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
@@ -197,20 +202,16 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
         SetWindowPos(win.hwnd(), nullptr, x, y, wd, ht, SWP_NOZORDER | SWP_NOACTIVATE);
         StageTrace("l:extent-applied");
     });
-    // 自定义格子：显示名 + 头栏右键（重命名 / 清空）——按格式归类已移除
-    grid.SetBoxNames(cfg.boxNames);
-    grid.SetOnBoxRenamed([&](const std::wstring& catKey, const std::wstring& newName) {
-        cfg.boxNames[ToUtf8(catKey)] = ToUtf8(newName);
-        store.save(cfg);
-    });
+    // 自定义容器：盒子清单变化（新增/重排/重命名/折叠）→ 持久化 cfg.boxes
+    grid.SetOnBoxesChanged([&] { cfg.boxes = grid.BoxesOut(); store.save(cfg); });
     grid.SetOnClearBox([&](int boxIdx) {
-        Category c = grid.CategoryAt(boxIdx);
-        for (auto& p : org.FilesIn(c)) org.MoveBackToDesktop(p);
+        std::wstring folder = grid.FolderAt(boxIdx);
+        if (!folder.empty())
+            for (auto& p : org.FilesInFolder(folder)) org.MoveBackToDesktop(p);
         grid.Refresh();
     });
     grid.SetOnMoved([&](bool window_moved) {  // 拖动结束：立即持久化
-        cfg.order = grid.SlotOrder();
-        cfg.collapsed = grid.CollapsedKeys();
+        cfg.boxes = grid.BoxesOut();
         RECT r{};
         GetWindowRect(win.hwnd(), &r);
         cfg.x = r.left;
@@ -223,7 +224,7 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
     grid.Refresh();
     StageTrace("2:grid-ready");
 
-    // 拖拽归位：资源管理器拖文件到格子 → MoveToCategory
+    // 拖拽归位：资源管理器拖文件到盒子 → 进该盒文件夹；非卡片区 → 放回桌面
     DropTarget dropTarget;
     dropTarget.SetHooks(
         [&](const POINTL& pt) {
@@ -232,17 +233,16 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
             // 客户端像素 → DIP（与 OnMouse 的 x/dpi*96 同空间）；勿再乘 96
             return grid.BoxAt(c.x / win.DpiScale(), c.y / win.DpiScale());
         },
-        [&](int box) { return grid.CategoryAt(box); },
-        [&](const std::vector<std::wstring>& files, Category cat) {
-            if (cat == Category::Doc) {  // 左上日程格：不接受文件拖入
+        [&](const std::vector<std::wstring>& files, int box) {
+            if (box >= 0 && grid.IsTasksAt(box)) {  // 待办盒：不接受文件拖入
                 grid.Refresh();
                 return;
             }
             for (auto& f : files) {
-                if (cat == Category::None)
-                    org.MoveBackToDesktop(f);  // 落在非卡片区 = 放回桌面
+                if (box < 0)  // 落在非卡片区 = 放回桌面
+                    org.MoveBackToDesktop(f);
                 else
-                    org.MoveToCategory(f, cat);
+                    org.MoveToFolder(f, grid.FolderAt(box));
             }
             grid.Refresh();
         },
@@ -277,6 +277,7 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
                 SetForegroundWindow(win.hwnd());
                 HMENU m = CreatePopupMenu();
                 AppendMenuW(m, MF_STRING, 7, L"快速搜索  (Ctrl+Space)");
+                AppendMenuW(m, MF_STRING, 8, L"新建容器…");
                 AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
                 AppendMenuW(m, MF_STRING | (autostart.IsEnabled() ? MF_CHECKED : 0u), 4,
                             L"开机自启");
@@ -294,6 +295,11 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
                     autostart.IsEnabled() ? autostart.Disable() : autostart.Enable();
                     break;
                 case 7: spot.Toggle(); break;
+                case 8: {  // 新建容器：加盒并立即就地重命名
+                    int bi = grid.AddBox(L"\u65B0\u5BB9\u5668");  // 新容器
+                    if (bi >= 0) grid.BeginRename(bi);
+                    break;
+                }
                 case 9: DestroyWindow(win.hwnd()); break;
                 }
             } else if (LOWORD(lp) == WM_LBUTTONDBLCLK) {
@@ -316,11 +322,8 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
                                                  : "independent";
     StageTrace("3:mode-restored");
 
-    // M2：自动归类监听（仅当模式非 off）
-    if (cfg.watcherMode != "off") {
-        watcherStarted = watcher.Start(desktop, win.hwnd(), WM_APP + 2);
-        if (!watcherStarted) StageTrace("watcher-start-FAILED");
-    }
+    // 按格式自动归类已随自定义容器模型移除：不再监听桌面新文件做分类归位。
+    // （watcher/flushPending/hint 保留为空档，但不注册 watcher 故不触发。）
 
     MSG m;
     while (GetMessageW(&m, nullptr, 0, 0) > 0) {

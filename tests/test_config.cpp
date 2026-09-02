@@ -13,7 +13,7 @@ static fs::path temp_file() {
     return dir / L"test-config.json";
 }
 
-TEST_CASE("load: 文件缺失返回默认值", "[config]") {
+TEST_CASE("load: 文件缺失返回默认两盒", "[config]") {
     ConfigStore store(fs::temp_directory_path() / L"no-such-dir" / L"x.json");
     auto c = store.load();
     REQUIRE(c.mode == "independent");
@@ -21,6 +21,11 @@ TEST_CASE("load: 文件缺失返回默认值", "[config]") {
     REQUIRE(c.w == 520);
     REQUIRE(c.watcherMode == "off");     // 默认关闭按格式自动归类
     REQUIRE(c.hideIconsMode == "hook");
+    REQUIRE(c.boxes.size() == 2);         // 缺省两盒：待办 + 默认容器
+    REQUIRE(c.boxes[0].type == "tasks");
+    REQUIRE(c.boxes[0].name == L"\u5F85\u529E");  // 待办
+    REQUIRE(c.boxes[1].type == "data");
+    REQUIRE(c.boxes[1].folder == L"box_b1");
 }
 
 TEST_CASE("save+load 往返一致", "[config]") {
@@ -32,28 +37,23 @@ TEST_CASE("save+load 往返一致", "[config]") {
     c.x = 640;
     c.y = 480;
     c.anchored = false;  // 用户手动摆放过
-    c.order = {"doc", "", "image", "video", "audio", "archive", "installer", "other"};
-    c.collapsed = {"doc", "video"};
+    c.boxes = DefaultBoxes();
+    c.boxes[1].name = L"\u5DE5\u4F5C";  // 默认容器 → 工作
+    c.boxes[1].collapsed = true;
     c.watcherMode = "auto";
     c.hideIconsMode = "hotkey";
-    c.boxNames["doc"] = "工作";
-    c.boxNames["image"] = "素材";
     REQUIRE(store.save(c));
     auto r = store.load();
     REQUIRE(r.mode == "desktop");
     REQUIRE(r.x == 640);
     REQUIRE(r.y == 480);
     REQUIRE_FALSE(r.anchored);
-    REQUIRE(r.order.size() == 8);
-    REQUIRE(r.order[0] == "doc");
-    REQUIRE(r.order[1].empty());  // 空槽
-    REQUIRE(r.order[2] == "image");
-    REQUIRE(r.collapsed.size() == 2);
-    REQUIRE(r.collapsed[0] == "doc");
+    REQUIRE(r.boxes.size() == 2);
+    REQUIRE(r.boxes[0].type == "tasks");
+    REQUIRE(r.boxes[1].name == L"\u5DE5\u4F5C");
+    REQUIRE(r.boxes[1].collapsed);
     REQUIRE(r.watcherMode == "auto");
     REQUIRE(r.hideIconsMode == "hotkey");
-    REQUIRE(r.boxNames.at("doc") == "工作");
-    REQUIRE(r.boxNames.at("image") == "素材");
 }
 
 TEST_CASE("save 原子替换：不留 .tmp 残留", "[config]") {

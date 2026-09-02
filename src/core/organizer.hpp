@@ -28,6 +28,13 @@ public:
 
     std::wstring BoxDir(Category c) const;
 
+    // —— 自定义容器（用户自建，每个盒子=容器内一个子文件夹）——
+    std::wstring FolderDir(const std::wstring& folder) const;              // 容器\folder
+    std::vector<std::wstring> FilesInFolder(const std::wstring& folder) const;
+    bool MoveToFolder(const std::wstring& path, const std::wstring& folder);
+    // 在容器内新建一个不冲突的盒子子目录（base 如 box_b1，同名自动加序号）
+    std::wstring MakeFolder(const std::wstring& base);
+
 private:
     bool MoveOne(const std::wstring& src, Category c);
     std::wstring UniqueTarget(const std::wstring& dst) const;

@@ -17,8 +17,7 @@ namespace lb {
 // 拖到空槽 = 移动，拖出网格 = 归位；空隙拖动整窗；顺序与折叠态持久化。
 class DesktopGrid {
 public:
-    static constexpr int kBoxCount = 7;
-    static constexpr int kSlotCount = 8;  // 2 行 × 4 列
+    static constexpr int kMaxBoxes = 24;  // 容器上限
     static constexpr int kPerRow = 4;
     static constexpr float kBoxW = 200.f, kGap = 14.f;
     static constexpr float kHeaderH = 34.f, kRowH = 22.f, kPad = 12.f;
@@ -36,28 +35,23 @@ public:
     void SetOrg(Organizer* org) { org_ = org; }
     void SetOnExtent(std::function<void(float w, float h)> cb) { on_extent_ = std::move(cb); }
     void SetHittest(std::function<int(float x, float y)> cb) { hittest_out_ = std::move(cb); }
-    // 拖动结束，宿主应持久化；window_moved=整窗位移（取消自动锚定），false=槽位交换/折叠
+    // 拖动结束，宿主应持久化；window_moved=整窗位移（取消自动锚定），false=盒子交换/折叠
     void SetOnMoved(std::function<void(bool window_moved)> cb) { on_moved_ = std::move(cb); }
-    // 自定义分类规则由宿主写入（现留接口）；格子不再按格式归类
-    void SetOnRule(std::function<void(const std::wstring& ext, Category cat)> cb) {
-        on_rule_ = std::move(cb);
-    }
-    // 每格自定义显示名（类目键 → 名称）；须在首次 Refresh 前注入
-    void SetBoxNames(const std::map<std::string, std::string>& names);
-    // 头栏右键「重命名此格」：宿主需持久化；「清空此格」：宿主把文件放回桌面
-    void SetOnBoxRenamed(
-        std::function<void(const std::wstring& catKey, const std::wstring& newName)> cb) {
-        on_box_renamed_ = std::move(cb);
-    }
+    // 盒子清单变化（新增/删除/重排/重命名/折叠）→ 宿主持久化 cfg.boxes
+    void SetOnBoxesChanged(std::function<void()> cb) { on_boxes_changed_ = std::move(cb); }
+    // 头栏右键「清空此格」：宿主把文件放回桌面
     void SetOnClearBox(std::function<void(int boxIdx)> cb) { on_clear_box_ = std::move(cb); }
-    // 启动时注入槽位顺序与折叠态（须在首次 Refresh 前调用；order 含 8 项，空串=空槽）
-    void SetSlots(const std::vector<std::string>& order,
-                  const std::vector<std::string>& collapsed);
+    // 从配置注入盒子清单（须在首次 Refresh 前调用）
+    void SetBoxes(const std::vector<BoxDef>& defs);
     void SetWindowHandle(HWND hwnd) { hwnd_ = hwnd; }
     void SetTasksFile(const std::wstring& p) { tasks_file_ = p; }  // 日程格数据文件
-    // 当前槽位顺序与折叠态（供宿主持久化）
-    std::vector<std::string> SlotOrder() const;
-    std::vector<std::string> CollapsedKeys() const;
+    // 当前盒子清单（供宿主持久化）；折叠态含在 BoxDef.collapsed 里
+    std::vector<BoxDef> BoxesOut() const;
+    int BoxCount() const { return (int)boxes_.size(); }
+    BoxDef BoxDefAt(int i) const;
+    // 新建数据容器：folder 由 org_.MakeFolder 生成；追加到末尾，返回其下标
+    int AddBox(const std::wstring& name);
+    void RemoveBox(int i);   // 移除盒子（文件放回桌面由宿主处理），并清空其文件夹
 
     void Refresh();                    // 从 Organizer 拉取内容并重排重绘
     void AnimateIn(HWND hwnd);         // 整理后逐格浮入（30ms stagger）
@@ -67,13 +61,18 @@ public:
     // 就地重命名格名的键盘入口（玻璃窗 WM_CHAR/WM_KEYDOWN/WM_KILLFOCUS → 这里）
     bool OnKeyboard(UINT msg, UINT wp);
     int BoxAt(float x, float y) const; // 命中测试，客户区坐标（含 bbox 偏移换算）
-    Category CategoryAt(int i) const { return boxes_[i].cat; }
+    std::wstring FolderAt(int i) const { return boxes_[i].folder; }
+    bool IsTasksAt(int i) const { return boxes_[i].isTasks; }
+    std::wstring NameAt(int i) const { return boxes_[i].name; }
+    void BeginRename(int i) { if (i >= 0 && i < (int)boxes_.size()) StartRename(i); }
     void SetDragBox(int i);            // 拖拽悬停高亮（-1 清除）
 
 private:
     struct Box {
-        Category cat{};
-        int slot = 0;                      // 槽位 0..7（槽位模型：拖拽换位）
+        std::string id;        // 稳定唯一键（tasks / b1 / b2 ...）
+        std::wstring name;     // 显示名（用户可就地重命名）
+        std::wstring folder;   // 容器内子目录（data 盒）；tasks 盒为空
+        bool isTasks = false;
         std::vector<std::wstring> files;   // 绝对路径（已排序）
         bool collapsed = false;
         bool hovered = false;
@@ -87,7 +86,7 @@ private:
         std::wstring text;
         bool done = false;
     };
-    static bool IsTasksBox(const Box& b) { return b.cat == Category::Doc; }
+    static bool IsTasksBox(const Box& b) { return b.isTasks; }
     enum class TaskHit {
         None,      // 空格体（不可交互）
         Header,    // 头栏（折叠/拖动/改名）
@@ -109,11 +108,9 @@ private:
     void CancelTaskEdit();
     void ResetToToday();
 
-    int BoxAtSlot(int slot) const;          // 槽位 → 格子下标（空槽 -1）
-    int NearestSlot(float x, float y) const; // 落点最近槽位（过远 -1）
     int BoxAtGrid(float x, float y) const;  // 命中测试，grid 坐标
     float HeightOf(const Box& b) const;
-    void LayoutGridPositions();  // 按槽位顺序排布（2 行，行高取该行最高）→ 写入 rect
+    void LayoutGridPositions();  // 按盒子顺序排布（kPerRow 列网格，行高取该行最高）→ 写入 rect
     void Relayout();             // 计算 bbox 并更新视觉偏移；定位回调/自定位
     void RedrawBox(int i);
     void DrawScroll(::ID2D1DeviceContext* ctx, float w, float y0, float y1, int shown,
@@ -123,9 +120,9 @@ private:
     void OpenFile(const std::wstring& path) const;
     void RowMenu(HWND hwnd, int boxIdx, const std::wstring& path);  // 行右键：打开/位置/放回
     void HeaderMenu(HWND hwnd, int boxIdx);                 // 头栏右键：重命名/清空
-    std::wstring DisplayName(Category c) const;             // 自定义名或默认类目名
+    std::wstring DisplayName(const Box& b) const;               // 该盒显示名（就地编辑后的 name）
     std::wstring EllipsizeW(const std::wstring& s, float maxW) const;  // 按像素宽度截断+省略号
-    void StartRename(int boxIdx);     // 双击格头 → 就地编辑该格名
+    void StartRename(int boxIdx);     // 就地编辑格名（双击头栏 / 托盘新建后调用）
     void CommitRename();              // 提交编辑（回车/点击别处/失焦）
     void CancelRename();              // 取消（Esc）
     float HeaderTextWidth(const std::wstring& s) const;     // DWrite 测宽（光标/选中定位）
@@ -138,13 +135,12 @@ private:
     IconCache icons_;
     float dpi_ = 96.f;
     std::vector<Box> boxes_;
-    std::map<std::wstring, std::wstring> boxNames_;   // 类目键(宽) → 显示名
     D2D1_RECT_F bbox_{};         // 全部格子的包围盒（grid 坐标，DIP）
     int hovered_ = -1;
     int drag_box_ = -1;
-    // 拖动状态：box_drag_>=0 拖单格（松手换槽位）；=-1 且 dragging_ 拖整窗（空隙）
+    // 拖动状态：box_drag_>=0 拖单盒（松手换位）；=-1 且 dragging_ 拖整窗（空隙）
     int box_drag_ = -1;
-    int drag_slot0_ = -1;        // 拖动起始槽位（落点无效时归位）
+    int drag_index0_ = -1;       // 拖动起始盒子下标（落点无效时归位）
     bool drag_on_header_ = false;
     bool dragging_ = false;
     bool drag_moved_ = false;
@@ -182,8 +178,7 @@ private:
     std::function<void(float, float)> on_extent_;
     std::function<int(float, float)> hittest_out_;
     std::function<void(bool)> on_moved_;
-    std::function<void(const std::wstring&, Category)> on_rule_;
-    std::function<void(const std::wstring&, const std::wstring&)> on_box_renamed_;
+    std::function<void()> on_boxes_changed_;
     std::function<void(int)> on_clear_box_;
 };
 

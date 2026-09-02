@@ -78,18 +78,6 @@ bool DesktopGrid::Init(GraphicsContext& gfx, ComPtr<IDCompositionVisual> root, f
     headerFmt_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
     rowFmt_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
 
-    const Category cats[kBoxCount] = {Category::Doc, Category::Image, Category::Video,
-                                      Category::Audio, Category::Archive,
-                                      Category::Installer, Category::Other};
-    for (int i = 0; i < kBoxCount; ++i) {
-        Box b;
-        b.cat = cats[i];
-        if (FAILED(gfx.device->CreateVisual(b.visual.GetAddressOf()))) return false;
-        b.visual->SetOffsetX(0.f);
-        b.visual->SetOffsetY(0.f);
-        root_->AddVisual(b.visual.Get(), TRUE, nullptr);
-        boxes_.push_back(std::move(b));
-    }
     ADate t = TodayDate();
     curY_ = t.y;
     curM_ = t.m;
@@ -100,10 +88,10 @@ bool DesktopGrid::Init(GraphicsContext& gfx, ComPtr<IDCompositionVisual> root, f
         curM_ = m;
         curD_ = d;
         CancelTaskEdit();
-        for (int i = 0; i < kBoxCount; ++i)
+        for (int i = 0; i < (int)boxes_.size(); ++i)
             if (IsTasksBox(boxes_[i])) boxes_[i].scroll = 0;  // 选新日期回到顶部
         Relayout();
-        for (int i = 0; i < kBoxCount; ++i)
+        for (int i = 0; i < (int)boxes_.size(); ++i)
             if (IsTasksBox(boxes_[i])) RedrawBox(i);
         SaveTasks();
     });
@@ -130,16 +118,20 @@ float DesktopGrid::HeightOf(const Box& b) const {
 }
 
 void DesktopGrid::LayoutGridPositions() {
-    float rowMaxH[2] = {0, 0};
-    for (auto& b : boxes_) {
-        int row = b.slot / kPerRow;
-        rowMaxH[row] = std::max(rowMaxH[row], HeightOf(b));
+    int n = (int)boxes_.size();
+    if (n == 0) return;
+    int rows = (n + kPerRow - 1) / kPerRow;
+    std::vector<float> rowMaxH(rows, 0.f);
+    for (int i = 0; i < n; ++i) {
+        int row = i / kPerRow;
+        rowMaxH[row] = std::max(rowMaxH[row], HeightOf(boxes_[i]));
     }
-    float rowY[2] = {0, rowMaxH[0] + kGap};
-    for (auto& b : boxes_) {
-        int row = b.slot / kPerRow, col = b.slot % kPerRow;
+    std::vector<float> rowY(rows, 0.f);
+    for (int r = 1; r < rows; ++r) rowY[r] = rowY[r - 1] + rowMaxH[r - 1] + kGap;
+    for (int i = 0; i < n; ++i) {
+        int row = i / kPerRow, col = i % kPerRow;
         float x = col * (kBoxW + kGap), y = rowY[row];
-        b.rect = {x, y, x + kBoxW, y + HeightOf(b)};
+        boxes_[i].rect = {x, y, x + kBoxW, y + HeightOf(boxes_[i])};
     }
 }
 
@@ -161,66 +153,91 @@ void DesktopGrid::Relayout() {
     if (on_extent_) on_extent_(maxx - minx, maxy - miny);
 }
 
-int DesktopGrid::BoxAtSlot(int slot) const {
-    for (int i = 0; i < kBoxCount; ++i)
-        if (boxes_[i].slot == slot) return i;
-    return -1;
-}
-
-int DesktopGrid::NearestSlot(float x, float y) const {
-    float rowMaxH[2] = {0, 0};
-    for (auto& b : boxes_)
-        rowMaxH[b.slot / kPerRow] = std::max(rowMaxH[b.slot / kPerRow], HeightOf(b));
-    float rowY[2] = {0, rowMaxH[0] + kGap};
-    int best = -1;
-    float bestD = (kBoxW * 1.5f) * (kBoxW * 1.5f);  // 距离超过 1.5 格宽 = 拖出网格，归位
-    for (int s = 0; s < kSlotCount; ++s) {
-        float cx = (s % kPerRow) * (kBoxW + kGap) + kBoxW / 2;
-        float cy = rowY[s / kPerRow] + std::max(rowMaxH[s / kPerRow], kHeaderH + 8.f) / 2;
-        float d = (cx - x) * (cx - x) + (cy - y) * (cy - y);
-        if (d < bestD) { bestD = d; best = s; }
+void DesktopGrid::SetBoxes(const std::vector<BoxDef>& defs) {
+    // 复用已有视觉；比旧清单多的则新建，少的则移除
+    while (boxes_.size() > defs.size()) {
+        if (root_ && boxes_.back().visual) root_->RemoveVisual(boxes_.back().visual.Get());
+        boxes_.pop_back();
     }
-    return best;
+    while (boxes_.size() < defs.size()) {
+        Box b;
+        if (FAILED(gfx_->device->CreateVisual(b.visual.GetAddressOf()))) return;
+        b.visual->SetOffsetX(0.f);
+        b.visual->SetOffsetY(0.f);
+        root_->AddVisual(b.visual.Get(), TRUE, nullptr);
+        boxes_.push_back(std::move(b));
+    }
+    for (int i = 0; i < (int)defs.size(); ++i) {
+        Box& b = boxes_[i];
+        b.id = defs[i].id;
+        b.name = defs[i].name;
+        b.folder = defs[i].folder;
+        b.isTasks = defs[i].type == "tasks";
+        b.collapsed = defs[i].collapsed;
+        b.scroll = 0;
+    }
+    Relayout();
 }
 
-void DesktopGrid::SetBoxNames(const std::map<std::string, std::string>& names) {
-    boxNames_.clear();
-    for (auto& [k, v] : names) boxNames_[ToWide(k)] = ToWide(v);
-}
-
-std::wstring DesktopGrid::DisplayName(Category c) const {
-    auto it = boxNames_.find(CategoryKey(c));
-    if (it != boxNames_.end() && !it->second.empty()) return it->second;
-    if (c == Category::Doc) return L"待办事项";  // 日程格默认名
-    return CategoryName(c);
-}
-
-void DesktopGrid::SetSlots(const std::vector<std::string>& order,
-                           const std::vector<std::string>& collapsed) {
-    for (auto& b : boxes_) b.slot = -1;
-    int next = 0;
-    for (auto& key : order)
-        for (auto& b : boxes_)
-            if (b.slot < 0 && ToUtf8(CategoryKey(b.cat)) == key) { b.slot = next++; break; }
-    for (auto& b : boxes_)
-        if (b.slot < 0 && next < kSlotCount) b.slot = next++;  // 未列出的补尾
-    for (auto& key : collapsed)
-        for (auto& b : boxes_)
-            if (ToUtf8(CategoryKey(b.cat)) == key) b.collapsed = true;
-}
-
-std::vector<std::string> DesktopGrid::SlotOrder() const {
-    std::vector<std::string> order(kSlotCount, "");
-    for (auto& b : boxes_)
-        if (b.slot >= 0 && b.slot < kSlotCount) order[b.slot] = ToUtf8(CategoryKey(b.cat));
-    return order;
-}
-
-std::vector<std::string> DesktopGrid::CollapsedKeys() const {
-    std::vector<std::string> out;
-    for (auto& b : boxes_)
-        if (b.collapsed) out.push_back(ToUtf8(CategoryKey(b.cat)));
+std::vector<BoxDef> DesktopGrid::BoxesOut() const {
+    std::vector<BoxDef> out;
+    out.reserve(boxes_.size());
+    for (auto& b : boxes_) {
+        BoxDef d;
+        d.id = b.id;
+        d.name = b.name;
+        d.folder = b.folder;
+        d.type = b.isTasks ? "tasks" : "data";
+        d.collapsed = b.collapsed;
+        out.push_back(std::move(d));
+    }
     return out;
+}
+
+BoxDef DesktopGrid::BoxDefAt(int i) const {
+    BoxDef d;
+    if (i >= 0 && i < (int)boxes_.size()) {
+        const Box& b = boxes_[i];
+        d.id = b.id;
+        d.name = b.name;
+        d.folder = b.folder;
+        d.type = b.isTasks ? "tasks" : "data";
+        d.collapsed = b.collapsed;
+    }
+    return d;
+}
+
+int DesktopGrid::AddBox(const std::wstring& name) {
+    if (!org_ || (int)boxes_.size() >= kMaxBoxes) return -1;
+    int idx = (int)boxes_.size();
+    std::wstring folder = org_->MakeFolder(L"box_b" + std::to_wstring(idx));  // idx0=待办,idx1=默认(box_b1)
+    Box b;
+    b.id = ToUtf8(folder);  // 以容器子目录为唯一键（MakeFolder 已去重）
+    b.name = name.empty() ? L"\u65B0\u5BB9\u5668" : name;  // 新容器
+    b.folder = folder;
+    b.isTasks = false;
+    if (FAILED(gfx_->device->CreateVisual(b.visual.GetAddressOf()))) return -1;
+    b.visual->SetOffsetX(0.f);
+    b.visual->SetOffsetY(0.f);
+    root_->AddVisual(b.visual.Get(), TRUE, nullptr);
+    boxes_.push_back(std::move(b));
+    Relayout();
+    RedrawBox(idx);
+    if (on_boxes_changed_) on_boxes_changed_();
+    return idx;
+}
+
+void DesktopGrid::RemoveBox(int i) {
+    if (i < 0 || i >= (int)boxes_.size()) return;
+    if (boxes_[i].isTasks) return;  // 待办盒不可删
+    if (root_ && boxes_[i].visual) root_->RemoveVisual(boxes_[i].visual.Get());
+    boxes_.erase(boxes_.begin() + i);  // 目录与文件保留（删盒不清文件）
+    Relayout();
+    if (on_boxes_changed_) on_boxes_changed_();
+}
+
+std::wstring DesktopGrid::DisplayName(const Box& b) const {
+    return b.name;
 }
 
 
@@ -268,7 +285,7 @@ void DesktopGrid::RedrawBox(int i) {
             if (caret_on_)
                 ctx->FillRectangle(D2D1::RectF(cx, 9.f, cx + 2.f, kHeaderH - 2), dim.Get());
         } else {
-            std::wstring title = DisplayName(b.cat);
+            std::wstring title = DisplayName(b);
             ctx->DrawText(title.c_str(), (UINT32)title.size(), headerFmt_.Get(),
                           {12.f, 6.f, w - 40.f, kHeaderH}, text.Get());
         }
@@ -469,14 +486,14 @@ void DesktopGrid::Refresh() {
             b.scroll = 0;
             continue;
         }
-        b.files = org_->FilesIn(b.cat);
+        b.files = org_->FilesInFolder(b.folder);
         std::sort(b.files.begin(), b.files.end(), [](const std::wstring& a, const std::wstring& c) {
             return _wcsicmp(fs::path(a).filename().c_str(), fs::path(c).filename().c_str()) < 0;
         });
         ClampScroll(b);
     }
     Relayout();
-    for (int i = 0; i < kBoxCount; ++i) RedrawBox(i);
+    for (int i = 0; i < (int)boxes_.size(); ++i) RedrawBox(i);
 }
 
 void DesktopGrid::ResetToToday() {
@@ -485,10 +502,10 @@ void DesktopGrid::ResetToToday() {
     curM_ = t.m;
     curD_ = t.d;
     CancelTaskEdit();
-    for (int i = 0; i < kBoxCount; ++i)
+    for (int i = 0; i < (int)boxes_.size(); ++i)
         if (IsTasksBox(boxes_[i])) boxes_[i].scroll = 0;  // 回今天回到顶部
     Relayout();
-    for (int i = 0; i < kBoxCount; ++i)
+    for (int i = 0; i < (int)boxes_.size(); ++i)
         if (IsTasksBox(boxes_[i])) RedrawBox(i);
     SaveTasks();
 }
@@ -546,7 +563,7 @@ void DesktopGrid::SaveTasks() {
 }
 
 void DesktopGrid::StartTaskEdit(int boxIdx, int rowIdx) {
-    if (boxIdx < 0 || boxIdx >= kBoxCount) return;
+    if (boxIdx < 0 || boxIdx >= (int)boxes_.size()) return;
     tasks_editing_ = true;
     task_edit_box_ = boxIdx;
     task_edit_row_ = rowIdx;  // rowIdx<0 → 新增行
@@ -609,7 +626,7 @@ int DesktopGrid::BoxAt(float x, float y) const {
 }
 
 int DesktopGrid::BoxAtGrid(float x, float y) const {
-    for (int i = kBoxCount - 1; i >= 0; --i) {  // 倒序：重叠时上层（后添加）优先
+    for (int i = (int)boxes_.size() - 1; i >= 0; --i) {  // 倒序：重叠时上层（后添加）优先
         const auto& r = boxes_[i].rect;
         if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return i;
     }
@@ -694,7 +711,7 @@ void DesktopGrid::RowMenu(HWND hwnd, int boxIdx, const std::wstring& path) {
 }
 
 void DesktopGrid::HeaderMenu(HWND hwnd, int boxIdx) {
-    if (boxIdx < 0 || boxIdx >= kBoxCount) return;
+    if (boxIdx < 0 || boxIdx >= (int)boxes_.size()) return;
     HMENU m = CreatePopupMenu();
     AppendMenuW(m, MF_STRING, 1, L"重命名此格…");
     AppendMenuW(m, MF_STRING, 2, L"清空此格（放回桌面）");
@@ -749,10 +766,10 @@ std::wstring DesktopGrid::EllipsizeW(const std::wstring& s, float maxW) const {
 }
 
 void DesktopGrid::StartRename(int boxIdx) {
-    if (boxIdx < 0 || boxIdx >= kBoxCount) return;
+    if (boxIdx < 0 || boxIdx >= (int)boxes_.size()) return;
     renaming_ = true;
     rename_box_ = boxIdx;
-    rename_buf_ = DisplayName(boxes_[boxIdx].cat);
+    rename_buf_ = boxes_[boxIdx].name;
     rename_caret_ = (int)rename_buf_.size();
     rename_selA_ = 0;
     rename_selB_ = (int)rename_buf_.size();  // 打开即全选，直接输入替换
@@ -769,11 +786,10 @@ void DesktopGrid::CommitRename() {
     int boxIdx = rename_box_;
     renaming_ = false;
     if (hwnd_) KillTimer(hwnd_, kCaretTimer);
-    std::wstring key = CategoryKey(boxes_[boxIdx].cat);
     std::wstring name = rename_buf_;
-    if (!name.empty() && name != DisplayName(boxes_[boxIdx].cat)) {
-        boxNames_[key] = name;
-        if (on_box_renamed_) on_box_renamed_(key, name);
+    if (!name.empty() && name != boxes_[boxIdx].name) {
+        boxes_[boxIdx].name = name;
+        if (on_boxes_changed_) on_boxes_changed_();  // 宿主持久化
     }
     RedrawBox(boxIdx);
 }
@@ -937,10 +953,10 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
                 b.visual->SetOffsetX((b.rect.left - bbox_.left + ddx) * dpi_);
                 b.visual->SetOffsetY((b.rect.top - bbox_.top + ddy) * dpi_);
                 gfx_->device->Commit();
-                // 实时高亮交换目标（拖动盒中心下的槽位）
+                // 实时高亮交换目标（拖动盒中心落点盒）
                 float cx = box_rect0_.left + ddx + kBoxW / 2;
                 float cy = box_rect0_.top + ddy + HeightOf(b) / 2;
-                SetDragBox(BoxAtSlot(NearestSlot(cx, cy)));
+                SetDragBox(BoxAtGrid(cx, cy));
             } else {  // 整窗
                 SetWindowPos(hwnd_, nullptr, drag_rect0_.left + dx, drag_rect0_.top + dy, 0, 0,
                              SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
@@ -982,7 +998,7 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
                 SetCapture(hwnd);
                 dragging_ = true;
                 box_drag_ = b;
-                drag_slot0_ = boxes_[b].slot;
+                drag_index0_ = b;
                 drag_on_header_ = (th == TaskHit::Header);
                 drag_moved_ = false;
                 GetCursorPos(&drag_cursor0_);
@@ -1001,7 +1017,7 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
                 CancelTaskEdit();
                 boxes_[b].scroll = 0;  // 换日期回到顶部
                 Relayout();
-                for (int i = 0; i < kBoxCount; ++i)
+                for (int i = 0; i < (int)boxes_.size(); ++i)
                     if (IsTasksBox(boxes_[i])) RedrawBox(i);
                 SaveTasks();
                 break;
@@ -1046,11 +1062,11 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
             GetCursorPos(&drag_cursor0_);
             SetCapture(hwnd);
             SetCursor(LoadCursorW(nullptr, IDC_HAND));
-        } else if (b >= 0) {  // 头栏 / 内边距 / 空卡片体 → 拖动该单格
+        } else if (b >= 0) {  // 头栏 / 内边距 / 空卡片体 → 拖动该单盒
             SetCapture(hwnd);
             dragging_ = true;
             box_drag_ = b;
-            drag_slot0_ = boxes_[b].slot;
+            drag_index0_ = b;
             drag_on_header_ = (row == -2);
             drag_moved_ = false;
             GetCursorPos(&drag_cursor0_);
@@ -1094,27 +1110,19 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
                 }
                 break;
             }
-            // 换槽位：松手光标位置（拖动盒中心）最近槽位；拖出网格则归位
+            // 换位：松手光标位置（拖动盒中心）落点盒；没落到盒子则保持原位（归位）
             SetDragBox(-1);  // 清除拖动中的目标高亮
             float cx = box_rect0_.left + drag_delta_.x / dpi_ + kBoxW / 2;
             float cy = box_rect0_.top + drag_delta_.y / dpi_ + HeightOf(boxes_[bd]) / 2;
-            int target = NearestSlot(cx, cy);
-            {
-                char t[80];
-                snprintf(t, 80, "d:up bd=%d moved=%d target=%d slot=%d", bd,
-                         (int)drag_moved_, target, boxes_[bd].slot);
-                StageTrace(t);
+            int target = BoxAtGrid(cx, cy);
+            if (bd < 0 || bd >= (int)boxes_.size()) break;  // 越界保护
+            if (target >= 0 && target != bd) {
+                std::swap(boxes_[target], boxes_[bd]);  // 交换两盒（含视觉）
+                Relayout();
+                if (on_moved_) on_moved_(false);
+            } else {
+                Relayout();  // 未落到其他盒 → 吸附回原位
             }
-            if (bd >= kBoxCount || bd < 0) break;  // 越界保护
-            if (target >= 0 && target != boxes_[bd].slot) {
-                int other = BoxAtSlot(target);
-                if (other >= 0)
-                    std::swap(boxes_[other].slot, boxes_[bd].slot);
-                else
-                    boxes_[bd].slot = target;
-            }
-            Relayout();  // 吸附回整齐槽位
-            if (on_moved_) on_moved_(false);
             break;
         }
         break;  // 其余 UP（含双击第二次 UP）不折叠：折叠仅走延时定时器
@@ -1219,7 +1227,7 @@ void DesktopGrid::OnWheel(int delta, float x, float y) {
 }
 
 void DesktopGrid::AnimateIn(HWND hwnd) {
-    for (UINT i = 0; i < kBoxCount; ++i)
+    for (UINT i = 0; i < boxes_.size(); ++i)
         SetTimer(hwnd, kTimerBase + i, 30 * i, nullptr);
     hwnd_ = hwnd;
 }
@@ -1260,7 +1268,7 @@ void DesktopGrid::OnTimer(HWND hwnd, UINT id) {
         }
         return;
     }
-    if (id < kTimerBase || id >= kTimerBase + kBoxCount) return;
+    if (id < kTimerBase || id >= kTimerBase + boxes_.size()) return;
     KillTimer(hwnd, id);
     Box& b = boxes_[id - kTimerBase];
 
