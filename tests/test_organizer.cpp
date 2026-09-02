@@ -28,7 +28,7 @@ TEST_CASE("一键整理：分类移动 + 跳过项", "[organizer]") {
     Desk d;
     Journal jr(d.jrPath.wstring());
     RuleSet rules;
-    Organizer org(d.dir.wstring(), rules, jr);
+    Organizer org(d.dir.wstring(), (d.dir / L"LumenBox").wstring(), rules, jr);
 
     std::ofstream(d.dir / L"a.pdf") << 'x';
     std::ofstream(d.dir / L"b.PNG") << 'x';
@@ -54,7 +54,7 @@ TEST_CASE("目标重名自动改名，永不覆盖", "[organizer]") {
     Desk d;
     Journal jr(d.jrPath.wstring());
     RuleSet rules;
-    Organizer org(d.dir.wstring(), rules, jr);
+    Organizer org(d.dir.wstring(), (d.dir / L"LumenBox").wstring(), rules, jr);
 
     std::ofstream(d.dir / L"a.pdf") << '1';
     org.OrganizeAll();
@@ -70,7 +70,7 @@ TEST_CASE("撤销最后一批恢复原状", "[organizer]") {
     Desk d;
     Journal jr(d.jrPath.wstring());
     RuleSet rules;
-    Organizer org(d.dir.wstring(), rules, jr);
+    Organizer org(d.dir.wstring(), (d.dir / L"LumenBox").wstring(), rules, jr);
 
     std::ofstream(d.dir / L"a.pdf") << 'x';
     std::ofstream(d.dir / L"b.png") << 'x';
@@ -88,7 +88,7 @@ TEST_CASE("拖拽归位与原位被占的撤销", "[organizer]") {
     Desk d;
     Journal jr(d.jrPath.wstring());
     RuleSet rules;
-    Organizer org(d.dir.wstring(), rules, jr);
+    Organizer org(d.dir.wstring(), (d.dir / L"LumenBox").wstring(), rules, jr);
 
     std::ofstream(d.dir / L"x.txt") << 'x';
     REQUIRE(org.MoveToCategory(d.dir / L"x.txt", Category::Doc));
@@ -104,7 +104,7 @@ TEST_CASE("拖到自身所在盒 → 不动、不产生副本", "[organizer]") {
     Desk d;
     Journal jr(d.jrPath.wstring());
     RuleSet rules;
-    Organizer org(d.dir.wstring(), rules, jr);
+    Organizer org(d.dir.wstring(), (d.dir / L"LumenBox").wstring(), rules, jr);
 
     std::ofstream(d.dir / L"x.txt") << 'x';
     REQUIRE(org.MoveToCategory(d.dir / L"x.txt", Category::Doc));
@@ -128,7 +128,7 @@ TEST_CASE("放回桌面：从格子移回桌面根，冲突唯一名，可撤销
     Desk d;
     Journal jr(d.jrPath.wstring());
     RuleSet rules;
-    Organizer org(d.dir.wstring(), rules, jr);
+    Organizer org(d.dir.wstring(), (d.dir / L"LumenBox").wstring(), rules, jr);
 
     std::ofstream(d.dir / L"y.pdf") << 'x';
     org.OrganizeAll();
@@ -161,7 +161,7 @@ TEST_CASE("隐藏文件不整理", "[organizer]") {
     Desk d;
     Journal jr(d.jrPath.wstring());
     RuleSet rules;
-    Organizer org(d.dir.wstring(), rules, jr);
+    Organizer org(d.dir.wstring(), (d.dir / L"LumenBox").wstring(), rules, jr);
 
     fs::path hidden = d.dir / L"hid.pdf";
     { std::ofstream o(hidden); o << 'x'; }

@@ -111,7 +111,7 @@ TEST_CASE("拖拽归位：命中格子才移动并回报类目", "[drop]") {
     Desk d;
     Journal jr((fs::temp_directory_path() / L"lumenbox_tests" / L"drop.jsonl").wstring());
     RuleSet rules;
-    Organizer org(d.dir.wstring(), rules, jr);
+    Organizer org(d.dir.wstring(), (d.dir / L"LumenBox").wstring(), rules, jr);
     std::ofstream(d.dir / L"song.mp3") << 'x';
     std::ofstream(d.dir / L"pic.jpg") << 'x';
 

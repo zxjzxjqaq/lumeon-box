@@ -44,10 +44,11 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
     SpikeConfig cfg = store.load();
 
     const std::wstring desktop = KnownPath(FOLDERID_Desktop);
-    const std::wstring boxRoot = desktop + L"\\LumenBox";
+    // 容器根：%APPDATA%\LumenBox（=appData）。格子=其下 <类目>\ 子文件夹；不再放在桌面。
+    const std::wstring boxRoot = appData;
     RuleSet rules = RuleSet::Load(appData + L"\\rules.json");
     Journal jr(appData + L"\\journal.jsonl");
-    Organizer org(desktop, rules, jr);
+    Organizer org(desktop, boxRoot, rules, jr);
 
     GlassWindow win;
     DesktopGrid grid;
@@ -65,10 +66,10 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
     Spotlight spot;
     spot.SetApps(&appIndex);
     spot.SetFilesFn([&]() -> std::vector<std::wstring> {
-        // 只搜「容器内」的文件：桌面\LumenBox\＜类目＞\ 下所有文件
+        // 只搜「容器内」的文件：%APPDATA%\LumenBox\＜类目＞\ 下所有文件
         std::vector<std::wstring> out;
         std::error_code ec;
-        const std::wstring root = boxRoot;  // desktop\LumenBox
+        const std::wstring root = boxRoot;  // %APPDATA%\LumenBox
         if (!fs::exists(root, ec)) return out;
         for (fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec); !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
             if (!it->is_directory(ec)) out.push_back(it->path().wstring());

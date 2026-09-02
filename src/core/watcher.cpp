@@ -13,7 +13,7 @@ static bool IsHiddenOrSystem(const fs::path& p) {
            (a & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM));
 }
 
-// file 是否落在 boxDir(<桌面>\LumenBox) 之内（含其类目子目录）——这些不参与桌面整理
+// file 是否落在 boxDir(<容器根>=%APPDATA%\LumenBox) 之内（含其类目子目录）——这些不参与桌面整理
 static bool InsideBox(const std::wstring& path, const std::wstring& boxDir) {
     if (boxDir.empty()) return false;
     std::wstring parent = fs::path(path).parent_path().wstring();

@@ -21,11 +21,15 @@ static void NotifyShellMove(const std::wstring& from, const std::wstring& to) {
     SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_PATHW, dto.c_str(), nullptr);
 }
 
-Organizer::Organizer(std::wstring desktopDir, const RuleSet& rules, Journal& jr)
-    : desktop_(std::move(desktopDir)), rules_(rules), jr_(jr) {}
+Organizer::Organizer(std::wstring desktopDir, std::wstring containerDir, const RuleSet& rules,
+                     Journal& jr)
+    : desktop_(std::move(desktopDir)),
+      container_(std::move(containerDir)),
+      rules_(rules),
+      jr_(jr) {}
 
 std::wstring Organizer::BoxDir(Category c) const {
-    return desktop_ + L"\\LumenBox\\" + CategoryName(c);
+    return container_ + L"\\" + CategoryName(c);
 }
 
 std::wstring Organizer::UniqueTarget(const std::wstring& dst) const {
@@ -97,8 +101,8 @@ bool Organizer::MoveBackToDesktop(const std::wstring& path) {
     std::error_code ec;
     fs::path p(path);
     if (!fs::exists(p, ec) || fs::is_directory(p, ec)) return false;
-    // 只接受 <desktop>\LumenBox\<类目>\ 内的文件，防止把任意路径当「放回」用
-    std::wstring root = (fs::path(desktop_) / L"LumenBox").wstring();
+    // 只接受 <container>\<类目>\ 内的文件，防止把任意路径当「放回」用
+    std::wstring root = container_;
     std::wstring parent = p.parent_path().wstring();
     if (_wcsicmp(parent.substr(0, root.size()).c_str(), root.c_str()) != 0) return false;
     if (parent.size() <= root.size() + 1) return false;  // LumenBox 根下不放文件

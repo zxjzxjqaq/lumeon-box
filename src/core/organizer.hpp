@@ -7,7 +7,7 @@
 
 namespace lb {
 
-// 整理执行器：桌面文件 → <Desktop>\LumenBox\<分类名>\
+// 整理执行器：桌面文件 → <容器根>\<分类名>\（容器根默认 %APPDATA%\LumenBox）
 // 只移动文件不移动目录；.lnk/隐藏/系统/~$ 临时文件跳过；永不覆盖（冲突加 (2)）。
 class Organizer {
 public:
@@ -16,7 +16,9 @@ public:
         std::map<std::wstring, int> byCategory;
     };
 
-    Organizer(std::wstring desktopDir, const RuleSet& rules, Journal& jr);
+    // desktopDir 桌面根；containerDir 容器根（<...>\LumenBox），格子=其下 <类目>\ 子文件夹
+    Organizer(std::wstring desktopDir, std::wstring containerDir, const RuleSet& rules,
+              Journal& jr);
 
     Summary OrganizeAll();                                    // 一键整理
     bool MoveToCategory(const std::wstring& path, Category c); // 拖拽归位
@@ -31,6 +33,7 @@ private:
     std::wstring UniqueTarget(const std::wstring& dst) const;
 
     std::wstring desktop_;
+    std::wstring container_;
     const RuleSet& rules_;
     Journal& jr_;
 };
