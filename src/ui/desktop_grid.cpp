@@ -326,12 +326,12 @@ void DesktopGrid::RedrawBox(int i) {
                     ctx->DrawText(name.c_str(), (UINT32)name.size(), rowFmt_.Get(),
                                   {36.f, y, w - 12.f, y + kRowH + 3.f}, text.Get());
                 }
-                // 超出上限 → 滚动条（仅滚动时显示）
+                // 超出上限 → 滚动条（淡入淡出）
                 if (b.files.size() > kMaxRows)
                     DrawScroll(ctx, w, kHeaderH + kPad * 0.4f,
                                kHeaderH + kPad * 0.4f + rows * kRowH, (int)rows,
-                               (int)b.files.size(), b.scroll, hl.Get(), dim.Get(),
-                               scrollbar_visible_ && scrollbar_box_ == i);
+                               (int)b.files.size(), b.scroll,
+                               scrollbar_box_ == i ? sb_alpha_ : 0.f);
             }
         }
     });
@@ -426,23 +426,25 @@ void DesktopGrid::DrawTasksBox(::ID2D1DeviceContext* ctx, int ti, float w, float
         ctx->DrawText(addHint.c_str(), (UINT32)addHint.size(), rowFmt_.Get(),
                       {14.f, ay, w - 10.f, ay + kRowH + 3.f}, dim.Get());
     }
-    // 事项超出上限 → 滚动条（仅滚动时显示）
+    // 事项超出上限 → 滚动条（淡入淡出）
     if (lst && lst->size() > kMaxRows)
-        DrawScroll(ctx, w, y0, ay, (int)shown, (int)lst->size(), boxes_[ti].scroll, hl.Get(),
-                   dim.Get(), scrollbar_visible_ && scrollbar_box_ == ti);
+        DrawScroll(ctx, w, y0, ay, (int)shown, (int)lst->size(), boxes_[ti].scroll,
+                   scrollbar_box_ == ti ? sb_alpha_ : 0.f);
 }
 
 void DesktopGrid::DrawScroll(ID2D1DeviceContext* ctx, float w, float y0, float y1, int shown,
-                             int total, int scroll, ID2D1Brush* track, ID2D1Brush* thumb,
-                             bool show) const {
-    if (!show) return;  // 仅滚动时显示
+                             int total, int scroll, float alpha) const {
+    if (alpha <= 0.01f) return;  // 未显示
     if (total <= shown) return;
     float trackH = y1 - y0;
     if (trackH <= 0) return;
-    ctx->FillRectangle(D2D1::RectF(w - 8.f, y0, w - 5.f, y1), track);  // 轨道
+    ComPtr<::ID2D1SolidColorBrush> track, thumb;
+    ctx->CreateSolidColorBrush(D2D1_COLOR_F{1.f, 1.f, 1.f, 0.22f * alpha}, track.GetAddressOf());
+    ctx->CreateSolidColorBrush(D2D1_COLOR_F{1.f, 1.f, 1.f, 0.55f * alpha}, thumb.GetAddressOf());
+    ctx->FillRectangle(D2D1::RectF(w - 8.f, y0, w - 5.f, y1), track.Get());  // 轨道
     float th = std::max(6.f, trackH * ((float)shown / (float)total));  // 滑块
     float ty = y0 + (trackH - th) * ((float)scroll / (float)(total - shown));
-    ctx->FillRectangle(D2D1::RectF(w - 8.f, ty, w - 5.f, ty + th), thumb);
+    ctx->FillRectangle(D2D1::RectF(w - 8.f, ty, w - 5.f, ty + th), thumb.Get());
 }
 
 void DesktopGrid::ClampScroll(Box& b) {
@@ -1208,10 +1210,11 @@ void DesktopGrid::OnWheel(int delta, float x, float y) {
     bx.scroll -= (delta / 120) * 2;  // 每格滚 2 行；上滚(正值)向开头，下滚(负值)向末尾
     if (bx.scroll < 0) bx.scroll = 0;
     if (bx.scroll > maxScroll) bx.scroll = maxScroll;
-    // 滚动时显示滚动条，停止 1100ms 后淡出
-    scrollbar_visible_ = true;
+    // 滚动时滚动条淡入，停止 1100ms 后淡出
     scrollbar_box_ = b;
-    SetTimer(hwnd_, kScrollbarFade, 1100, nullptr);
+    sb_target_ = 1.f;
+    SetTimer(hwnd_, kScrollbarFade, 1100, nullptr);  // 停止滚动后开始淡出
+    SetTimer(hwnd_, kScrollbarTick, 30, nullptr);    // 立即开始淡入动画
     RedrawBox(b);
 }
 
@@ -1228,9 +1231,20 @@ void DesktopGrid::OnTimer(HWND hwnd, UINT id) {
         else if (tasks_editing_) RedrawBox(task_edit_box_);
         return;
     }
-    if (id == kScrollbarFade) {  // 停止滚动 1100ms 后隐藏滚动条
+    if (id == kScrollbarFade) {  // 停止滚动 1100ms 后开始淡出
         KillTimer(hwnd, kScrollbarFade);
-        scrollbar_visible_ = false;
+        sb_target_ = 0.f;
+        SetTimer(hwnd, kScrollbarTick, 30, nullptr);  // 淡出动画
+        return;
+    }
+    if (id == kScrollbarTick) {  // 滚动条淡入淡出动画帧
+        const float step = 0.08f;
+        if (sb_alpha_ < sb_target_) sb_alpha_ = std::min(sb_target_, sb_alpha_ + step);
+        else sb_alpha_ = std::max(sb_target_, sb_alpha_ - step);
+        if (sb_alpha_ == sb_target_) {
+            KillTimer(hwnd, kScrollbarTick);
+            if (sb_target_ == 0.f) scrollbar_box_ = -1;  // 完全隐藏
+        }
         if (scrollbar_box_ >= 0) RedrawBox(scrollbar_box_);
         return;
     }

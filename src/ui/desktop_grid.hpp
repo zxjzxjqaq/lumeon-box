@@ -27,7 +27,8 @@ public:
     static constexpr UINT kTimerBase = 200;    // AnimateIn 逐格定时器
     static constexpr UINT kCollapseTimer = 300;   // 单击格头折叠延时(约250ms)
     static constexpr UINT kCaretTimer = 310;   // 编辑光标闪烁(530ms)
-    static constexpr UINT kScrollbarFade = 320; // 滚动条滚动后淡出(1100ms)
+    static constexpr UINT kScrollbarFade = 320; // 停止滚动后开始淡出(1100ms)
+    static constexpr UINT kScrollbarTick = 330; // 滚动条淡入淡出动画帧(~30ms)
     static constexpr UINT kCollapseDelay = 250;   // ms
     static constexpr UINT kCaretBlink = 530;   // ms
 
@@ -116,8 +117,7 @@ private:
     void Relayout();             // 计算 bbox 并更新视觉偏移；定位回调/自定位
     void RedrawBox(int i);
     void DrawScroll(::ID2D1DeviceContext* ctx, float w, float y0, float y1, int shown,
-                    int total, int scroll, ::ID2D1Brush* track, ::ID2D1Brush* thumb,
-                    bool show) const;
+                    int total, int scroll, float alpha) const;
     void ClampScroll(Box& b);                    // 按内容量裁剪滚动偏移
     int RowIndexAt(const Box& b, float x, float y) const;   // -1=无  -2=头栏
     void OpenFile(const std::wstring& path) const;
@@ -159,7 +159,8 @@ private:
     int rename_caret_ = 0;
     int rename_selA_ = 0, rename_selB_ = 0;   // 选中区间（selA<selB 时有选中）
     bool caret_on_ = true;                    // 编辑光标闪烁
-    bool scrollbar_visible_ = false;          // 滚动条仅在滚动时显示
+    float sb_alpha_ = 0.f;                    // 滚动条当前透明度(0..1)
+    float sb_target_ = 0.f;                   // 滚动条目标透明度(淡入→1 淡出→0)
     int scrollbar_box_ = -1;                  // 正在显示滚动条的格
     int collapse_pending_ = -1;               // 延时折叠中的格（双击则取消并改名）
     // 日程格（左上「文档」格）：当前选中日期 + 任务数据 + 就地编辑态
