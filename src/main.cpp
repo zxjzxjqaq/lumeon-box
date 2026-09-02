@@ -356,7 +356,12 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
     MSG m;
     while (GetMessageW(&m, nullptr, 0, 0) > 0) {
         TranslateMessage(&m);
-        DispatchMessageW(&m);
+        try {
+            DispatchMessageW(&m);
+        } catch (std::exception const& e) {  // 任何 UI 异常只记录，不再弹模态框卡死
+            std::string s = std::string("loop-exc:") + e.what();
+            StageTrace(s.c_str());
+        }
     }
     StageTrace("6:loop-exited");
     watcher.Stop();

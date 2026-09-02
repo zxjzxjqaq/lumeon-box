@@ -57,8 +57,7 @@ void Spotlight::OnOpen() {
     MoveToTop();
     ShowWindow(hwnd_, SW_SHOW);
     SetForegroundWindow(hwnd_);
-    SetActiveWindow(hwnd_);
-    SetFocus(hwnd_);
+    SetFocus(hwnd_);  // SetActiveWindow 对分层窗并不必要且可能引发前台异常，去掉
 }
 
 void Spotlight::OnClose() {

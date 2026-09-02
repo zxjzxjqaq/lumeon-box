@@ -24,14 +24,18 @@ HWND FindDesktopIcons() {
     return nullptr;
 }
 
-// 点是否落在桌面图标上（图标列表的 HitTest）
+// 点是否落在桌面图标上（图标列表的 HitTest；用超时避免资源管理器忙时阻塞全局鼠标）
 bool PointOverIcon(const POINT& pt, HWND list) {
     if (!list) return false;
     POINT c = pt;
     ScreenToClient(list, &c);
     LVHITTESTINFO hti{};
     hti.pt = c;
-    return ListView_HitTest(list, &hti) != -1;
+    DWORD_PTR res = 0;
+    if (SendMessageTimeoutW(list, LVM_HITTEST, 0, reinterpret_cast<LPARAM>(&hti),
+                            SMTO_ABORTIFHUNG, 100, &res))
+        return res != static_cast<DWORD_PTR>(-1);
+    return false;  // 资源管理器无响应：不考虑触发双击隐藏
 }
 
 // 双键命中的是「桌面空白」（而非图标、非其它窗口）
