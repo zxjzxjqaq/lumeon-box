@@ -30,10 +30,12 @@ bool Spotlight::Create(HINSTANCE hInst) {
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     wc.lpszClassName = L"LumenBoxSpotlight";
     RegisterClassW(&wc);
-    kH = kHeaderH + kMaxRows * kRowH + 12;
+    kH = kHeaderH + kMaxRows * kRowH + 12;  // 逻辑像素高度
+    scale_ = GetDpiForSystem() / 96.f;      // 按显示器 DPI 放大，避免高分辨率下发虚
+    int w = (int)(kW * scale_), h = (int)(kH * scale_);
     hwnd_ = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
                             wc.lpszClassName, L"LumenBox 搜索", WS_POPUP, CW_USEDEFAULT,
-                            CW_USEDEFAULT, kW, kH, nullptr, nullptr, wc.hInstance, this);
+                            CW_USEDEFAULT, w, h, nullptr, nullptr, wc.hInstance, this);
     return hwnd_ != nullptr;
 }
 
@@ -78,14 +80,15 @@ void Spotlight::Refresh() {
 void Spotlight::Draw() {
     if (!hwnd_) return;
 
-    // 内存 DIB：kW×kH、32bpp，供 GDI+ 绘制后以预乘 alpha 交给 UpdateLayeredWindow
-    int w = kW, h = kH;
+    // 内存 DIB：pixelW×pixelH、32bpp，供 GDI+ 以 ScaleTransform 放大绘制后交给分层窗口
+    int w = kW, h = kH;                       // 逻辑像素（绘制坐标）
+    int pw = (int)(w * scale_), ph = (int)(h * scale_);
     HDC screen = GetDC(nullptr);
     HDC mem = CreateCompatibleDC(screen);
     BITMAPINFO bi{};
     bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
-    bi.bmiHeader.biWidth = w;
-    bi.bmiHeader.biHeight = -h;  // 顶朝下
+    bi.bmiHeader.biWidth = pw;
+    bi.bmiHeader.biHeight = -ph;  // 顶朝下
     bi.bmiHeader.biPlanes = 1;
     bi.bmiHeader.biBitCount = 32;
     bi.bmiHeader.biCompression = BI_RGB;
@@ -101,6 +104,7 @@ void Spotlight::Draw() {
         Gdiplus::Graphics g(mem);
         g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
         g.SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAlias);
+        g.ScaleTransform(scale_, scale_);  // 逻辑 → 物理像素（高 DPI 清晰）
 
         // 先整体涂成透明
         Gdiplus::SolidBrush clear(Gdiplus::Color(0, 0, 0, 0));
@@ -114,7 +118,7 @@ void Spotlight::Draw() {
         path.AddArc(w - r - 0.5f, h - r - 0.5f, r, r, 0, 90);
         path.AddArc(0.5f, h - r - 0.5f, r, r, 90, 90);
         path.CloseFigure();
-        Gdiplus::SolidBrush bg(Gdiplus::Color(184, 11, 14, 20));
+        Gdiplus::SolidBrush bg(Gdiplus::Color(235, 11, 14, 20));  // 近不透明，文字清晰
         g.FillPath(&bg, &path);
         Gdiplus::Pen stroke(Gdiplus::Color(70, 34, 211, 238), 1.f);
         g.DrawPath(&stroke, &path);
@@ -122,10 +126,11 @@ void Spotlight::Draw() {
         // 查询行
         Gdiplus::Font fQ(L"Microsoft YaHei UI", 13.f, Gdiplus::FontStyleRegular,
                          Gdiplus::UnitPixel);
-        std::wstring disp = query_.empty() ? L"搜索应用与桌面文件…" : query_;
-        Gdiplus::SolidBrush qtext(query_.empty() ? Gdiplus::Color(120, 160, 170, 180)
+        std::wstring disp = query_.empty() ? L"搜索容器内文件…" : query_;
+        Gdiplus::SolidBrush qtext(query_.empty() ? Gdiplus::Color(150, 160, 170, 180)
                                                  : Gdiplus::Color(235, 238, 245));
-        Gdiplus::RectF qbox((Gdiplus::REAL)kPad, 14.f, (Gdiplus::REAL)(w - 2 * kPad), 30.f);
+        Gdiplus::RectF qbox((Gdiplus::REAL)kPad, 14.f, (Gdiplus::REAL)(w - 2 * kPad - 150.f),
+                            30.f);
         g.DrawString(disp.c_str(), (INT)disp.size(), &fQ, qbox, nullptr, &qtext);
 
         // 静态光标：紧跟已输入文本
@@ -137,6 +142,17 @@ void Spotlight::Draw() {
             g.FillRectangle(&caret,
                             Gdiplus::RectF(cx, 17.f, 2.f, 18.f));
         }
+        // 提示 + 关闭按钮
+        Gdiplus::SolidBrush hint(Gdiplus::Color(120, 255, 255, 255));
+        Gdiplus::Font fHint(L"Microsoft YaHei UI", 10.f, Gdiplus::FontStyleRegular,
+                            Gdiplus::UnitPixel);
+        const wchar_t* escHint = L"Esc 关闭";
+        Gdiplus::RectF eb((Gdiplus::REAL)(w - 130), 16.f, (Gdiplus::REAL)100, 22.f);
+        g.DrawString(escHint, -1, &fHint, eb, nullptr, &hint);
+        Gdiplus::SolidBrush closecol(Gdiplus::Color(220, 255, 255, 255));
+        Gdiplus::Pen closePen(&closecol, 1.5f);
+        g.DrawLine(&closePen, (Gdiplus::REAL)(w - 30), 18.f, (Gdiplus::REAL)(w - 14), 34.f);
+        g.DrawLine(&closePen, (Gdiplus::REAL)(w - 30), 34.f, (Gdiplus::REAL)(w - 14), 18.f);
 
         // 分隔线
         Gdiplus::SolidBrush sep(Gdiplus::Color(40, 255, 255, 255));
@@ -166,7 +182,7 @@ void Spotlight::Draw() {
 
     // 预乘 alpha
     auto* px = static_cast<unsigned*>(bits);
-    for (int i = 0; i < w * h; ++i) {
+    for (int i = 0; i < pw * ph; ++i) {
         unsigned a = (px[i] >> 24) & 0xFF;
         px[i] = (a << 24) |
                 ((((px[i] >> 16) & 0xFF) * a / 255) << 16) |
@@ -175,7 +191,7 @@ void Spotlight::Draw() {
     }
 
     POINT ptSrc{0, 0};
-    SIZE sz{w, h};
+    SIZE sz{pw, ph};
     BLENDFUNCTION bf{AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
     // 保持窗口现有位置（由 SetWindowPos 决定），位置参数传 NULL
     UpdateLayeredWindow(hwnd_, nullptr, nullptr, &sz, mem, &ptSrc, 0, &bf, ULW_ALPHA);
@@ -196,10 +212,11 @@ void Spotlight::MoveToTop() {
     RECT work{};
     SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
     int w = work.right - work.left, h = work.bottom - work.top;
-    int x = work.left + (w - kW) / 2;
-    int y = work.top + h / 3 - kH / 2;
+    int ww = (int)(kW * scale_), wh = (int)(kH * scale_);
+    int x = work.left + (w - ww) / 2;
+    int y = work.top + h / 3 - wh / 2;
     if (y < work.top) y = work.top;
-    SetWindowPos(hwnd_, HWND_TOPMOST, x, y, kW, kH, SWP_NOACTIVATE);
+    SetWindowPos(hwnd_, HWND_TOPMOST, x, y, ww, wh, SWP_NOACTIVATE);
 }
 
 void Spotlight::Launch(int i) {
@@ -251,8 +268,24 @@ LRESULT CALLBACK Spotlight::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 self->query_.pop_back();
                 self->Refresh();
             }
+        } else if (wp == VK_ESCAPE) {
+            self->OnClose();
         }
         return 0;
+    case WM_LBUTTONDOWN: {
+        float s = self->scale_ ? self->scale_ : 1.f;
+        int x = (int)(GET_X_LPARAM(lp) / s), y = (int)(GET_Y_LPARAM(lp) / s);  // 逻辑坐标
+        if (x >= kW - 34 && x <= kW - 6 && y >= 14 && y <= 38) {  // ✕ 关闭
+            self->OnClose();
+            return 0;
+        }
+        // 单击结果行 → 打开
+        if (y >= kHeaderH) {
+            int row = (y - kHeaderH) / kRowH;
+            if (row >= 0 && row < (int)self->hits_.size()) self->Launch(row);
+        }
+        return 0;
+    }
     case WM_CLOSE:
         self->OnClose();
         return 0;

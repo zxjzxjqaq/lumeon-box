@@ -67,14 +67,13 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
     Spotlight spot;
     spot.SetApps(&appIndex);
     spot.SetFilesFn([&]() -> std::vector<std::wstring> {
+        // 只搜「容器内」的文件：桌面\LumenBox\＜类目＞\ 下所有文件
         std::vector<std::wstring> out;
         std::error_code ec;
-        for (fs::directory_iterator it(
-                 desktop, fs::directory_options::skip_permission_denied, ec),
-             end;
-             !ec && it != end; it.increment(ec)) {
-            if (it->is_directory(ec)) continue;
-            out.push_back(it->path().wstring());
+        const std::wstring root = boxRoot;  // desktop\LumenBox
+        if (!fs::exists(root, ec)) return out;
+        for (fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec); !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+            if (!it->is_directory(ec)) out.push_back(it->path().wstring());
         }
         return out;
     });

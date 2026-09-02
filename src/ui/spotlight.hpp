@@ -30,6 +30,7 @@ private:
 
     static constexpr int kW = 560, kHeaderH = 46, kRowH = 36, kMaxRows = 9;
     int kH = 0;
+    float scale_ = 1.f;  // DPI 缩放（GetDpiForSystem/96），窗口与绘制统一放大
     HWND hwnd_ = nullptr;
     const AppIndex* apps_ = nullptr;
     std::function<std::vector<std::wstring>()> filesFn_;
