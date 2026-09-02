@@ -40,7 +40,6 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
 
     const std::wstring appData = ConfigStore::default_dir().wstring();
     const std::wstring cfgPath = appData + L"\\config.json";
-    const bool fresh = !fs::exists(cfgPath);
 
     ConfigStore store(cfgPath);
     SpikeConfig cfg = store.load();
@@ -80,9 +79,9 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
         return out;
     });
 
-    DesktopMode mode = cfg.mode == "bottom"    ? DesktopMode::Bottom
-                     : cfg.mode == "independent" && !fresh ? DesktopMode::Independent
-                                                           : DesktopMode::DesktopLayer;
+    // 用户要求：容器作为桌面层挂载（盖在图标上），并随桌面常驻——「显示桌面/Win+D」也不消失。
+    // 顶层浮窗(independent/bottom)会被显示桌面最小化，故一律默认挂到桌面层(DesktopLayer)。
+    DesktopMode mode = DesktopMode::DesktopLayer;
 
     auto doUndo = [&] {
         org.UndoLast();
