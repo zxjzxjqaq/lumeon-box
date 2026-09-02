@@ -21,6 +21,7 @@ public:
     static constexpr int kPerRow = 4;
     static constexpr float kBoxW = 200.f, kGap = 14.f;
     static constexpr float kHeaderH = 34.f, kRowH = 22.f, kPad = 12.f;
+    static constexpr float kDateH = 26.f;  // 日程格日期条高
     static constexpr int kMaxRows = 12;
     static constexpr UINT kTimerBase = 200;   // AnimateIn 逐格定时器
     static constexpr UINT kCollapseTimer = 300;  // 单击格头折叠延时(约250ms)
@@ -48,6 +49,7 @@ public:
     void SetSlots(const std::vector<std::string>& order,
                   const std::vector<std::string>& collapsed);
     void SetWindowHandle(HWND hwnd) { hwnd_ = hwnd; }
+    void SetTasksFile(const std::wstring& p) { tasks_file_ = p; }  // 日程格数据文件
     // 当前槽位顺序与折叠态（供宿主持久化）
     std::vector<std::string> SlotOrder() const;
     std::vector<std::string> CollapsedKeys() const;
@@ -73,6 +75,33 @@ private:
         ComPtr<IDCompositionVisual> visual;
     };
 
+    // —— 日程格（左上「文档」格）：选日期 → 该日期工作事项 → 打勾完成 ——
+    struct TaskRec {
+        std::wstring text;
+        bool done = false;
+    };
+    static bool IsTasksBox(const Box& b) { return b.cat == Category::Doc; }
+    enum class TaskHit {
+        None,      // 空格体（不可交互）
+        Header,    // 头栏（折叠/拖动/改名）
+        PrevDate,  // ◀
+        NextDate,  // ▶
+        DateLabel, // 日期文字（双击回今天）
+        Row,       // 事项行文本（双击编辑）
+        Check,     // 事项行打勾
+        AddRow,    // ＋添加事项
+    };
+    TaskHit TaskHitTest(const Box& b, float x, float y, int& taskIdx) const;
+    float TasksHeight(const Box& b) const;   // 日程格高度（含日期条+事项+添加行）
+    void DrawTasksBox(::ID2D1DeviceContext* ctx, int ti, float w, float h) const;  // 日程内容
+    std::wstring SelectedKey() const;        // "YYYY-MM-DD"
+    void LoadTasks();
+    void SaveTasks();
+    void StartTaskEdit(int boxIdx, int rowIdx);  // rowIdx<0 → 新增行
+    void CommitTaskEdit();
+    void CancelTaskEdit();
+    void ResetToToday();
+
     int BoxAtSlot(int slot) const;          // 槽位 → 格子下标（空槽 -1）
     int NearestSlot(float x, float y) const; // 落点最近槽位（过远 -1）
     int BoxAtGrid(float x, float y) const;  // 命中测试，grid 坐标
@@ -89,6 +118,7 @@ private:
     void CommitRename();              // 提交编辑（回车/点击别处/失焦）
     void CancelRename();              // 取消（Esc）
     float HeaderTextWidth(const std::wstring& s) const;     // DWrite 测宽（光标/选中定位）
+    float RowTextWidth(const std::wstring& s) const;        // 行字号（日程编辑光标定位）
 
     GraphicsContext* gfx_ = nullptr;
     ComPtr<IDCompositionVisual> root_;
@@ -118,6 +148,16 @@ private:
     int rename_caret_ = 0;
     int rename_selA_ = 0, rename_selB_ = 0;   // 选中区间（selA<selB 时有选中）
     int collapse_pending_ = -1;               // 延时折叠中的格（双击则取消并改名）
+    // 日程格（左上「文档」格）：当前选中日期 + 任务数据 + 就地编辑态
+    int curY_ = 0, curM_ = 0, curD_ = 0;      // 当前选中日期（未初始化=今天）
+    std::map<std::wstring, std::vector<TaskRec>> tasks_;  // "YYYY-MM-DD" → 事项
+    std::wstring tasks_file_;                 // %APPDATA%\LumenBox\tasks.json
+    bool tasks_editing_ = false;
+    int task_edit_box_ = -1;
+    int task_edit_row_ = -1;                  // <0 → 新增行
+    std::wstring task_buf_;
+    int task_caret_ = 0;
+    int task_selA_ = 0, task_selB_ = 0;
     // 文件级拖动：按下文件行 → 移动超阈值即发起 OLE 拖动（拖出/拖到其他格）
     bool file_press_ = false;
     std::wstring pending_file_;

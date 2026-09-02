@@ -180,6 +180,7 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
     grid.Init(win.gfx(), win.Root(), win.DpiScale());
     grid.SetSlots(cfg.order, cfg.collapsed);
     grid.SetWindowHandle(win.hwnd());
+    grid.SetTasksFile(appData + L"\\tasks.json");  // 日程格数据（左上「文档」格）
     grid.SetOnExtent([&](float w, float h) {
         RECT work{};
         SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
@@ -238,6 +239,10 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
         },
         [&](int box) { return grid.CategoryAt(box); },
         [&](const std::vector<std::wstring>& files, Category cat) {
+            if (cat == Category::Doc) {  // 左上日程格：不接受文件拖入
+                grid.Refresh();
+                return;
+            }
             for (auto& f : files) {
                 if (cat == Category::None)
                     org.MoveBackToDesktop(f);  // 落在非卡片区 = 放回桌面

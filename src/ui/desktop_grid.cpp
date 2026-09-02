@@ -2,6 +2,9 @@
 #include "ui/file_drag.hpp"
 #include "ui/input_box.hpp"
 #include <algorithm>
+#include <fstream>
+#include <wchar.h>
+#include <nlohmann/json.hpp>
 #include "core/strutil.hpp"
 #include "core/stage_log.hpp"
 #include <filesystem>
@@ -16,6 +19,48 @@ namespace fs = std::filesystem;
 static std::wstring Ellipsize(const std::wstring& s, size_t maxChars) {
     if (s.size() <= maxChars) return s;
     return s.substr(0, maxChars - 1) + L"…";
+}
+
+// —— 日程格：格里高利历日期工具（跨月/跨年安全）——
+struct ADate {
+    int y, m, d;
+};
+static bool LeapY(int y) { return (y % 4 == 0 && y % 100 != 0) || y % 400 == 0; }
+static int DimOf(int y, int m) {
+    static const int d[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    if (m == 2) return LeapY(y) ? 29 : 28;
+    return d[m - 1];
+}
+static long long Jdn(int y, int m, int d) {  // 儒略日数（0 UTC 正午）
+    long long a = (14 - m) / 12;
+    long long yy = y + 4800 - a, mm = m + 12 * a - 3;
+    return d + (153 * mm + 2) / 5 + 365 * yy + yy / 4 - yy / 100 + yy / 400 - 32045;
+}
+static ADate FromJdn(long long j) {
+    long long a = j + 32044, b = (4 * a + 3) / 146097, c = a - (146097 * b) / 4;
+    long long dd = (4 * c + 3) / 1461, e = c - (1461 * dd) / 4, m = (5 * e + 2) / 153;
+    int day = (int)(e - (153 * m + 2) / 5 + 1);
+    int month = (int)(m + 3 - 12 * (m / 10));
+    int year = (int)(100 * b + dd - 4800 + m / 10);
+    return {year, month, day};
+}
+static ADate TodayDate() {
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    return {st.wYear, st.wMonth, st.wDay};
+}
+static ADate AddDays(ADate d, int n) { return FromJdn(Jdn(d.y, d.m, d.d) + n); }
+static std::wstring DateKey(ADate d) {
+    wchar_t b[16];
+    swprintf_s(b, L"%04d-%02d-%02d", d.y, d.m, d.d);
+    return b;
+}
+static std::wstring DateLabel(ADate d) {
+    static const wchar_t* WD[] = {L"一", L"二", L"三", L"四", L"五", L"六", L"日"};
+    int wd = (int)(Jdn(d.y, d.m, d.d) % 7);  // 0=周一
+    wchar_t b[32];
+    swprintf_s(b, L"%d月%d日 周%s", d.m, d.d, WD[wd]);
+    return b;
 }
 
 bool DesktopGrid::Init(GraphicsContext& gfx, ComPtr<IDCompositionVisual> root, float dpi) {
@@ -46,12 +91,29 @@ bool DesktopGrid::Init(GraphicsContext& gfx, ComPtr<IDCompositionVisual> root, f
         root_->AddVisual(b.visual.Get(), TRUE, nullptr);
         boxes_.push_back(std::move(b));
     }
+    ADate t = TodayDate();
+    curY_ = t.y;
+    curM_ = t.m;
+    curD_ = t.d;
+    LoadTasks();
     gfx.device->Commit();
     return true;
 }
 
+std::wstring DesktopGrid::SelectedKey() const {
+    return DateKey({curY_, curM_, curD_});
+}
+
+float DesktopGrid::TasksHeight(const Box& b) const {
+    if (b.collapsed) return kHeaderH;
+    size_t rows = std::min<size_t>(tasks_.count(SelectedKey()) ? tasks_.at(SelectedKey()).size() : 0,
+                                   (size_t)kMaxRows);
+    return kHeaderH + kDateH + kPad * 0.4f + static_cast<float>(rows + 1) * kRowH + 4.f;
+}
+
 float DesktopGrid::HeightOf(const Box& b) const {
     if (b.collapsed) return kHeaderH;
+    if (IsTasksBox(b)) return TasksHeight(b);
     size_t rows = std::min<size_t>(b.files.size(), kMaxRows);
     return kHeaderH + kPad + static_cast<float>(rows) * kRowH + 4.f;
 }
@@ -195,7 +257,18 @@ void DesktopGrid::RedrawBox(int i) {
             ctx->DrawText(title.c_str(), (UINT32)title.size(), headerFmt_.Get(),
                           {12.f, 6.f, w - 40.f, kHeaderH}, text.Get());
         }
-        std::wstring count = std::to_wstring(b.files.size());
+        std::wstring count;
+        if (IsTasksBox(b)) {  // 日程格：已办/总数
+            auto it = tasks_.find(SelectedKey());
+            int total = it != tasks_.end() ? (int)it->second.size() : 0;
+            int done = 0;
+            if (it != tasks_.end())
+                for (auto& tk : it->second)
+                    if (tk.done) ++done;
+            count = std::to_wstring(done) + L"/" + std::to_wstring(total);
+        } else {
+            count = std::to_wstring(b.files.size());
+        }
         ctx->DrawText(count.c_str(), (UINT32)count.size(), headerFmt_.Get(),
                       {w - 34.f, 6.f, w - 10.f, kHeaderH}, dim.Get());
         ctx->DrawLine({10.f, kHeaderH}, {w - 10.f, kHeaderH}, line.Get(), 0.8f);
@@ -221,22 +294,26 @@ void DesktopGrid::RedrawBox(int i) {
         }
 
         if (!b.collapsed) {
-            size_t rows = std::min<size_t>(b.files.size(), kMaxRows);
-            for (size_t r = 0; r < rows; ++r) {
-                std::wstring name = Ellipsize(fs::path(b.files[r]).filename().wstring(), 19);
-                float y = kHeaderH + kPad * 0.4f + static_cast<float>(r) * kRowH;
-                if (auto* icon = icons_.Get(ctx, b.files[r])) {
-                    ctx->DrawBitmap(icon, D2D1::RectF(14.f, y + 3.f, 30.f, y + 19.f), 1.f,
-                                    D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC);
+            if (IsTasksBox(b)) {  // 日程格：日期条 + 事项 + 添加行
+                DrawTasksBox(ctx, i, w, h);
+            } else {
+                size_t rows = std::min<size_t>(b.files.size(), kMaxRows);
+                for (size_t r = 0; r < rows; ++r) {
+                    std::wstring name = Ellipsize(fs::path(b.files[r]).filename().wstring(), 19);
+                    float y = kHeaderH + kPad * 0.4f + static_cast<float>(r) * kRowH;
+                    if (auto* icon = icons_.Get(ctx, b.files[r])) {
+                        ctx->DrawBitmap(icon, D2D1::RectF(14.f, y + 3.f, 30.f, y + 19.f), 1.f,
+                                        D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC);
+                    }
+                    ctx->DrawText(name.c_str(), (UINT32)name.size(), rowFmt_.Get(),
+                                  {36.f, y, w - 12.f, y + kRowH + 3.f}, text.Get());
                 }
-                ctx->DrawText(name.c_str(), (UINT32)name.size(), rowFmt_.Get(),
-                              {36.f, y, w - 12.f, y + kRowH + 3.f}, text.Get());
-            }
-            if (b.files.size() > kMaxRows) {
-                std::wstring more = L"+ " + std::to_wstring(b.files.size() - kMaxRows) + L" 更多";
-                float y = kHeaderH + kPad * 0.4f + static_cast<float>(kMaxRows) * kRowH;
-                ctx->DrawText(more.c_str(), (UINT32)more.size(), rowFmt_.Get(),
-                              {14.f, y, w - 12.f, y + kRowH + 3.f}, dim.Get());
+                if (b.files.size() > kMaxRows) {
+                    std::wstring more = L"+ " + std::to_wstring(b.files.size() - kMaxRows) + L" 更多";
+                    float y = kHeaderH + kPad * 0.4f + static_cast<float>(kMaxRows) * kRowH;
+                    ctx->DrawText(more.c_str(), (UINT32)more.size(), rowFmt_.Get(),
+                                  {14.f, y, w - 12.f, y + kRowH + 3.f}, dim.Get());
+                }
             }
         }
     });
@@ -246,9 +323,96 @@ void DesktopGrid::RedrawBox(int i) {
     }
 }
 
+void DesktopGrid::DrawTasksBox(::ID2D1DeviceContext* ctx, int ti, float w, float h) const {
+    (void)h;
+    ComPtr<::ID2D1SolidColorBrush> text, dim, hl, accent, white;
+    ctx->CreateSolidColorBrush(D2D1_COLOR_F{1.f, 1.f, 1.f, 0.92f}, text.GetAddressOf());
+    ctx->CreateSolidColorBrush(D2D1_COLOR_F{1.f, 1.f, 1.f, 0.55f}, dim.GetAddressOf());
+    ctx->CreateSolidColorBrush(D2D1_COLOR_F{1.f, 1.f, 1.f, 0.25f}, hl.GetAddressOf());
+    ctx->CreateSolidColorBrush(D2D1_COLOR_F{0.133f, 0.827f, 0.933f, 0.85f}, accent.GetAddressOf());
+    ctx->CreateSolidColorBrush(D2D1_COLOR_F{1.f, 1.f, 1.f, 0.92f}, white.GetAddressOf());
+
+    float dy = kHeaderH;  // 日期条顶
+    // ◀ / ▶
+    ctx->DrawText(L"\u25C0", 1, rowFmt_.Get(), {kPad, dy + 2.f, kPad + 18.f, dy + kDateH},
+                  dim.Get());
+    ctx->DrawText(L"\u25B6", 1, rowFmt_.Get(), {w - kPad - 18.f, dy + 2.f, w - kPad, dy + kDateH},
+                  dim.Get());
+    // 日期
+    std::wstring lbl = DateLabel({curY_, curM_, curD_});
+    ctx->DrawText(lbl.c_str(), (UINT32)lbl.size(), rowFmt_.Get(),
+                  {kPad + 26.f, dy + 2.f, w - kPad - 26.f, dy + kDateH}, text.Get());
+    ctx->DrawLine({10.f, dy + kDateH}, {w - 10.f, dy + kDateH}, dim.Get(), 0.7f);
+
+    auto it = tasks_.find(SelectedKey());
+    const std::vector<TaskRec>* lst = it != tasks_.end() ? &it->second : nullptr;
+    size_t shown = lst ? std::min<size_t>(lst->size(), kMaxRows) : 0;
+    float y0 = dy + kDateH + kPad * 0.4f;
+    for (size_t r = 0; r < shown; ++r) {
+        const TaskRec& tk = (*lst)[r];
+        float ry = y0 + static_cast<float>(r) * kRowH;
+        // 打勾框：未完成=描边，完成=青色填充+对勾
+        D2D1_ROUNDED_RECT cb{{14.f, ry + 5.f, 28.f, ry + 19.f}, 3.f, 3.f};
+        if (tk.done) {
+            ctx->FillRoundedRectangle(cb, accent.Get());
+            ctx->DrawLine({16.f, ry + 12.f}, {20.f, ry + 16.f}, white.Get(), 1.6f);
+            ctx->DrawLine({20.f, ry + 16.f}, {26.f, ry + 8.f}, white.Get(), 1.6f);
+        } else {
+            ctx->DrawRoundedRectangle(cb, hl.Get(), 1.f);
+        }
+        // 事项文本
+        std::wstring nm = Ellipsize(tk.text, 18);
+        auto* br = tk.done ? dim.Get() : text.Get();
+        if (tasks_editing_ && task_edit_box_ == ti && task_edit_row_ == (int)r) {
+            D2D1_RECT_F tr{36.f, ry, w - 10.f, ry + kRowH};
+            if (task_selA_ < task_selB_) {
+                float sx = tr.left + RowTextWidth(task_buf_.substr(0, task_selA_));
+                float ex = tr.left + RowTextWidth(task_buf_.substr(0, task_selB_));
+                if (ex > tr.right - 2) ex = tr.right - 2;
+                if (ex > sx) ctx->FillRectangle(D2D1::RectF(sx, ry + 2.f, ex, ry + kRowH - 3), hl.Get());
+            }
+            if (!task_buf_.empty())
+                ctx->DrawText(task_buf_.c_str(), (UINT32)task_buf_.size(), rowFmt_.Get(), tr,
+                              text.Get());
+            float cx = tr.left + RowTextWidth(task_buf_.substr(0, task_caret_));
+            if (cx > tr.right - 2) cx = tr.right - 2;
+            ctx->FillRectangle(D2D1::RectF(cx, ry + 2.f, cx + 2.f, ry + kRowH - 3), dim.Get());
+        } else {
+            ctx->DrawText(nm.c_str(), (UINT32)nm.size(), rowFmt_.Get(),
+                          {36.f, ry, w - 10.f, ry + kRowH + 3.f}, br);
+        }
+    }
+    // 添加行
+    float ay = y0 + static_cast<float>(shown) * kRowH;
+    if (tasks_editing_ && task_edit_box_ == ti && task_edit_row_ < 0) {
+        std::wstring pfx = L"\uFF0B ";  // ＋
+        D2D1_RECT_F tr{14.f, ay, w - 10.f, ay + kRowH};
+        if (task_selA_ < task_selB_) {
+            float base = tr.left + HeaderTextWidth(pfx);
+            float sx = base + HeaderTextWidth(task_buf_.substr(0, task_selA_));
+            float ex = base + HeaderTextWidth(task_buf_.substr(0, task_selB_));
+            if (ex > tr.right - 2) ex = tr.right - 2;
+            if (ex > sx) ctx->FillRectangle(D2D1::RectF(sx, ay + 2.f, ex, ay + kRowH - 3), hl.Get());
+        }
+        std::wstring shownStr = pfx + task_buf_;
+        ctx->DrawText(shownStr.c_str(), (UINT32)shownStr.size(), rowFmt_.Get(), tr, text.Get());
+        float cx = tr.left + RowTextWidth(pfx + task_buf_.substr(0, task_caret_));
+        if (cx > tr.right - 2) cx = tr.right - 2;
+        ctx->FillRectangle(D2D1::RectF(cx, ay + 2.f, cx + 2.f, ay + kRowH - 3), dim.Get());
+    } else {
+        const std::wstring addHint = L"\uFF0B \u6DFB\u52A0\u4E8B\u9879";  // ＋ 添加事项
+        ctx->DrawText(addHint.c_str(), (UINT32)addHint.size(), rowFmt_.Get(),
+                      {14.f, ay, w - 10.f, ay + kRowH + 3.f}, dim.Get());
+    }
+}
+
 void DesktopGrid::Refresh() {
     if (!org_) return;
     for (auto& b : boxes_) {
+        if (IsTasksBox(b)) {  // 日程格不列文件
+            b.files.clear();
+            continue;
+        }
         b.files = org_->FilesIn(b.cat);
         std::sort(b.files.begin(), b.files.end(), [](const std::wstring& a, const std::wstring& c) {
             return _wcsicmp(fs::path(a).filename().c_str(), fs::path(c).filename().c_str()) < 0;
@@ -256,6 +420,122 @@ void DesktopGrid::Refresh() {
     }
     Relayout();
     for (int i = 0; i < kBoxCount; ++i) RedrawBox(i);
+}
+
+void DesktopGrid::ResetToToday() {
+    ADate t = TodayDate();
+    curY_ = t.y;
+    curM_ = t.m;
+    curD_ = t.d;
+    CancelTaskEdit();
+    Relayout();
+    for (int i = 0; i < kBoxCount; ++i)
+        if (IsTasksBox(boxes_[i])) RedrawBox(i);
+    SaveTasks();
+}
+
+void DesktopGrid::LoadTasks() {
+    tasks_.clear();
+    if (tasks_file_.empty()) return;
+    std::ifstream f(tasks_file_, std::ios::binary);
+    if (!f) return;
+    try {
+        nlohmann::json j = nlohmann::json::parse(f);
+        if (auto it = j.find("selDate"); it != j.end() && it->is_string()) {
+            std::wstring s = ToWide(it->get<std::string>());
+            int y = 0, m = 0, d = 0;
+            if (swscanf_s(s.c_str(), L"%04d-%02d-%02d", &y, &m, &d) == 3 && m >= 1 && m <= 12 &&
+                d >= 1 && d <= DimOf(y, m)) {
+                curY_ = y;
+                curM_ = m;
+                curD_ = d;
+            }
+        }
+        auto it = j.find("tasks");
+        if (it != j.end() && it->is_object()) {
+            for (auto& [k, v] : it->items()) {
+                std::vector<TaskRec> vec;
+                for (auto& e : v) {
+                    TaskRec r;
+                    r.text = ToWide(e.value("text", std::string()));
+                    r.done = e.value("done", false);
+                    vec.push_back(std::move(r));
+                }
+                tasks_[ToWide(k)] = std::move(vec);
+            }
+        }
+    } catch (...) {
+    }
+}
+
+void DesktopGrid::SaveTasks() {
+    if (tasks_file_.empty()) return;
+    nlohmann::json tj = nlohmann::json::object();
+    for (auto& [k, vec] : tasks_) {
+        nlohmann::json arr = nlohmann::json::array();
+        for (auto& r : vec)
+            arr.push_back(nlohmann::json{{"text", ToUtf8(r.text)}, {"done", r.done}});
+        tj[ToUtf8(k)] = std::move(arr);
+    }
+    nlohmann::json j;
+    j["selDate"] = ToUtf8(SelectedKey());
+    j["tasks"] = std::move(tj);
+    std::error_code ec;
+    std::filesystem::create_directories(std::filesystem::path(tasks_file_).parent_path(), ec);
+    std::ofstream f(tasks_file_, std::ios::binary);
+    f << j.dump(2);
+}
+
+void DesktopGrid::StartTaskEdit(int boxIdx, int rowIdx) {
+    if (boxIdx < 0 || boxIdx >= kBoxCount) return;
+    tasks_editing_ = true;
+    task_edit_box_ = boxIdx;
+    task_edit_row_ = rowIdx;  // rowIdx<0 → 新增行
+    auto it = tasks_.find(SelectedKey());
+    if (rowIdx >= 0 && it != tasks_.end() && (size_t)rowIdx < it->second.size())
+        task_buf_ = it->second[(size_t)rowIdx].text;
+    else
+        task_buf_.clear();
+    task_caret_ = (int)task_buf_.size();
+    task_selA_ = 0;
+    task_selB_ = (int)task_buf_.size();  // 全选，直接输入替换
+    if (hwnd_) SetFocus(hwnd_);
+    RedrawBox(boxIdx);
+}
+
+void DesktopGrid::CommitTaskEdit() {
+    if (!tasks_editing_) return;
+    int boxIdx = task_edit_box_, rowIdx = task_edit_row_;
+    std::wstring txt = task_buf_;
+    tasks_editing_ = false;
+    task_edit_box_ = -1;
+    size_t a = txt.find_first_not_of(L" \t\r\n");  // 去首尾空白
+    if (a != std::wstring::npos) {
+        size_t b2 = txt.find_last_not_of(L" \t\r\n");
+        txt = txt.substr(a, b2 - a + 1);
+    } else
+        txt.clear();
+    auto& vec = tasks_[SelectedKey()];
+    if (rowIdx >= 0 && (size_t)rowIdx < vec.size()) {  // 编辑既有
+        if (!txt.empty())
+            vec[(size_t)rowIdx].text = txt;
+        else
+            vec.erase(vec.begin() + rowIdx);
+    } else if (!txt.empty()) {  // 新增
+        vec.push_back({txt, false});
+    }
+    if (vec.empty()) tasks_.erase(SelectedKey());
+    SaveTasks();
+    Relayout();
+    RedrawBox(boxIdx);
+}
+
+void DesktopGrid::CancelTaskEdit() {
+    if (!tasks_editing_) return;
+    int boxIdx = task_edit_box_;
+    tasks_editing_ = false;
+    task_edit_box_ = -1;
+    RedrawBox(boxIdx);
 }
 
 int DesktopGrid::BoxAt(float x, float y) const {
@@ -286,6 +566,35 @@ int DesktopGrid::RowIndexAt(const Box& b, float x, float y) const {
     size_t shown = std::min<size_t>(b.files.size(), kMaxRows);
     if (idx < 0 || idx >= static_cast<int>(shown)) return -1;
     return idx;
+}
+
+DesktopGrid::TaskHit DesktopGrid::TaskHitTest(const Box& b, float x, float y,
+                                              int& taskIdx) const {
+    taskIdx = -1;
+    if (b.collapsed) return TaskHit::Header;
+    float relY = y - b.rect.top;
+    if (relY < kHeaderH) return TaskHit::Header;
+    float w = kBoxW, lx = x - b.rect.left;
+    float bodyY = relY - kHeaderH;
+    if (bodyY < kDateH) {  // 日期条：◀ / ▶ / 日期文字
+        if (lx >= kPad && lx <= kPad + 22) return TaskHit::PrevDate;
+        if (lx >= w - kPad - 22 && lx <= w - kPad) return TaskHit::NextDate;
+        return TaskHit::DateLabel;
+    }
+    float relList = bodyY - kDateH - kPad * 0.4f;
+    if (relList < 0) return TaskHit::None;
+    int idx = static_cast<int>(relList / kRowH);
+    auto it = tasks_.find(SelectedKey());
+    const std::vector<TaskRec>* lst = it != tasks_.end() ? &it->second : nullptr;
+    size_t shown = lst ? std::min<size_t>(lst->size(), kMaxRows) : 0;
+    if (idx < 0) return TaskHit::None;
+    if ((size_t)idx < shown) {
+        taskIdx = idx;
+        if (lx <= 36.f) return TaskHit::Check;  // 打勾区
+        return TaskHit::Row;
+    }
+    if ((size_t)idx == shown) return TaskHit::AddRow;
+    return TaskHit::None;
 }
 
 void DesktopGrid::OpenFile(const std::wstring& path) const {
@@ -349,6 +658,17 @@ float DesktopGrid::HeaderTextWidth(const std::wstring& s) const {
     return m.widthIncludingTrailingWhitespace;
 }
 
+float DesktopGrid::RowTextWidth(const std::wstring& s) const {
+    if (s.empty()) return 0.f;
+    ComPtr<IDWriteTextLayout> lay;
+    if (FAILED(dwrite_->CreateTextLayout(s.c_str(), (UINT32)s.size(), rowFmt_.Get(),
+                                         kBoxW - 40.f, kRowH, &lay)))
+        return 0.f;
+    DWRITE_TEXT_METRICS m{};
+    lay->GetMetrics(&m);
+    return m.widthIncludingTrailingWhitespace;
+}
+
 void DesktopGrid::StartRename(int boxIdx) {
     if (boxIdx < 0 || boxIdx >= kBoxCount) return;
     renaming_ = true;
@@ -383,8 +703,58 @@ void DesktopGrid::CancelRename() {
 
 bool DesktopGrid::OnKeyboard(UINT msg, UINT wp) {
     if (msg == WM_KILLFOCUS) {  // 失焦（打开搜索/切窗）→ 提交
+        if (tasks_editing_) {
+            CommitTaskEdit();
+            return true;
+        }
         if (!renaming_) return false;
         CommitRename();
+        return true;
+    }
+    if (tasks_editing_) {  // 日程格事项编辑（新增/修改）
+        if (msg == WM_CHAR) {
+            if (wp >= 0x20 && wp <= 0xFFFF) {
+                if (task_selA_ < task_selB_) {
+                    task_buf_.erase(task_selA_, task_selB_ - task_selA_);
+                    task_caret_ = task_selA_;
+                    task_selA_ = task_selB_ = 0;
+                }
+                task_buf_.insert(task_caret_, 1, (wchar_t)wp);
+                ++task_caret_;
+                RedrawBox(task_edit_box_);
+            }
+            return true;
+        }
+        if (msg == WM_KEYDOWN) {
+            switch ((int)wp) {
+            case VK_LEFT:  if (task_caret_ > 0) --task_caret_; task_selA_ = task_selB_ = 0; break;
+            case VK_RIGHT: if (task_caret_ < (int)task_buf_.size()) ++task_caret_; task_selA_ = task_selB_ = 0; break;
+            case VK_HOME:  task_caret_ = 0; task_selA_ = task_selB_ = 0; break;
+            case VK_END:   task_caret_ = (int)task_buf_.size(); task_selA_ = task_selB_ = 0; break;
+            case VK_BACK:
+                if (task_selA_ < task_selB_) {
+                    task_buf_.erase(task_selA_, task_selB_ - task_selA_);
+                    task_caret_ = task_selA_; task_selA_ = task_selB_ = 0;
+                } else if (task_caret_ > 0) {
+                    task_buf_.erase(task_caret_ - 1, 1);
+                    --task_caret_;
+                }
+                break;
+            case VK_DELETE:
+                if (task_selA_ < task_selB_) {
+                    task_buf_.erase(task_selA_, task_selB_ - task_selA_);
+                    task_caret_ = task_selA_; task_selA_ = task_selB_ = 0;
+                } else if (task_caret_ < (int)task_buf_.size()) {
+                    task_buf_.erase(task_caret_, 1);
+                }
+                break;
+            case VK_RETURN: CommitTaskEdit(); return true;
+            case VK_ESCAPE: CancelTaskEdit(); return true;
+            default: return true;  // 编辑期吞掉其他键
+            }
+            RedrawBox(task_edit_box_);
+            return true;
+        }
         return true;
     }
     if (!renaming_) return false;
@@ -438,8 +808,10 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
     hwnd_ = hwnd;
     x += bbox_.left;  // 客户区 → grid 坐标（矩形/命中都在 grid 空间）
     y += bbox_.top;
-    if (msg == WM_LBUTTONDOWN && renaming_)
-        CommitRename();  // 编辑中点击别处 → 提交
+    if (msg == WM_LBUTTONDOWN) {
+        if (renaming_) CommitRename();        // 编辑中点击别处 → 提交（格名）
+        if (tasks_editing_) CommitTaskEdit();  // 事项编辑中点击别处 → 提交
+    }
     int b = BoxAtGrid(x, y);
     switch (msg) {
     case WM_MOUSEMOVE: {
@@ -491,7 +863,23 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
             return;
         }
         int row = b >= 0 ? RowIndexAt(boxes_[b], x, y) : -1;
-        SetCursor(LoadCursorW(nullptr, row >= 0 ? IDC_HAND : IDC_ARROW));
+        bool hand = row >= 0;
+        if (b >= 0 && IsTasksBox(boxes_[b])) {  // 日程格：互动区手型
+            int tk = -1;
+            switch (TaskHitTest(boxes_[b], x, y, tk)) {
+            case TaskHit::PrevDate:
+            case TaskHit::NextDate:
+            case TaskHit::Check:
+            case TaskHit::AddRow:
+            case TaskHit::Row:
+                hand = true;
+                break;
+            default:
+                hand = false;
+                break;
+            }
+        }
+        SetCursor(LoadCursorW(nullptr, hand ? IDC_HAND : IDC_ARROW));
         if (b != hovered_) {
             int old = hovered_;
             hovered_ = b;
@@ -501,6 +889,55 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
         break;
     }
     case WM_LBUTTONDOWN: {
+        if (b >= 0 && IsTasksBox(boxes_[b])) {  // 日程格：日期导航/打勾/添加，其余交拖动
+            int tk = -1;
+            TaskHit th = TaskHitTest(boxes_[b], x, y, tk);
+            if (th == TaskHit::Header || th == TaskHit::None) {  // 头栏/空区 → 拖动该单格
+                SetCapture(hwnd);
+                dragging_ = true;
+                box_drag_ = b;
+                drag_slot0_ = boxes_[b].slot;
+                drag_on_header_ = (th == TaskHit::Header);
+                drag_moved_ = false;
+                GetCursorPos(&drag_cursor0_);
+                box_rect0_ = boxes_[b].rect;
+                SetCursor(LoadCursorW(nullptr, IDC_SIZEALL));
+                break;
+            }
+            switch (th) {
+            case TaskHit::PrevDate:
+            case TaskHit::NextDate: {
+                ADate d = {curY_, curM_, curD_};
+                d = AddDays(d, th == TaskHit::PrevDate ? -1 : 1);
+                curY_ = d.y;
+                curM_ = d.m;
+                curD_ = d.d;
+                CancelTaskEdit();
+                Relayout();
+                for (int i = 0; i < kBoxCount; ++i)
+                    if (IsTasksBox(boxes_[i])) RedrawBox(i);
+                SaveTasks();
+                break;
+            }
+            case TaskHit::Check: {
+                auto it = tasks_.find(SelectedKey());
+                if (it != tasks_.end() && tk >= 0 && (size_t)tk < it->second.size()) {
+                    it->second[(size_t)tk].done = !it->second[(size_t)tk].done;
+                    SaveTasks();
+                    RedrawBox(b);
+                }
+                break;
+            }
+            case TaskHit::AddRow:
+                StartTaskEdit(b, -1);
+                break;
+            case TaskHit::Row:
+            case TaskHit::DateLabel:
+            default:
+                break;  // 单击行/日期不动；双击编辑；右键删除
+            }
+            break;
+        }
         int row = b >= 0 ? RowIndexAt(boxes_[b], x, y) : -9;
         {
             char t[96];
@@ -590,6 +1027,15 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
     case WM_LBUTTONDBLCLK: {
         KillTimer(hwnd, kCollapseTimer);  // 双击：取消待折叠（还未来得及折叠，故不闪）
         collapse_pending_ = -1;
+        if (b >= 0 && IsTasksBox(boxes_[b])) {  // 日程格：双击行编辑/双击日期回今天
+            int tk = -1;
+            TaskHit th = TaskHitTest(boxes_[b], x, y, tk);
+            if (th == TaskHit::Row && tk >= 0)
+                StartTaskEdit(b, tk);
+            else if (th == TaskHit::DateLabel)
+                ResetToToday();
+            break;
+        }
         if (b >= 0) {
             int row = RowIndexAt(boxes_[b], x, y);
             if (row == -2)
@@ -600,6 +1046,36 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
         break;
     }
     case WM_RBUTTONUP: {
+        if (b >= 0 && IsTasksBox(boxes_[b])) {  // 日程格：右键事项 → 删除/编辑
+            int tk = -1;
+            TaskHit th = TaskHitTest(boxes_[b], x, y, tk);
+            if (th == TaskHit::Row && tk >= 0) {
+                HMENU m = CreatePopupMenu();
+                AppendMenuW(m, MF_STRING, 1, L"编辑");
+                AppendMenuW(m, MF_STRING, 2, L"删除");
+                POINT pt;
+                GetCursorPos(&pt);
+                SetForegroundWindow(hwnd);
+                int cmd = TrackPopupMenu(m, TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
+                                         pt.x, pt.y, 0, hwnd, nullptr);
+                DestroyMenu(m);
+                auto it = tasks_.find(SelectedKey());
+                if (it != tasks_.end() && tk >= 0 && (size_t)tk < it->second.size()) {
+                    if (cmd == 1)
+                        StartTaskEdit(b, tk);
+                    else if (cmd == 2) {
+                        it->second.erase(it->second.begin() + tk);
+                        if (it->second.empty()) tasks_.erase(it);
+                        SaveTasks();
+                        Relayout();
+                        RedrawBox(b);
+                    }
+                }
+            } else if (th == TaskHit::Header) {
+                HeaderMenu(hwnd, b);
+            }
+            break;
+        }
         if (b >= 0) {
             int row = RowIndexAt(boxes_[b], x, y);
             if (row >= 0)
