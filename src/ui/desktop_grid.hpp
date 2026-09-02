@@ -23,6 +23,8 @@ public:
     static constexpr float kHeaderH = 34.f, kRowH = 22.f, kPad = 12.f;
     static constexpr int kMaxRows = 12;
     static constexpr UINT kTimerBase = 200;   // AnimateIn 逐格定时器
+    static constexpr UINT kCollapseTimer = 300;  // 单击格头折叠延时(约250ms)
+    static constexpr UINT kCollapseDelay = 250;  // ms
 
     bool Init(GraphicsContext& gfx, ComPtr<IDCompositionVisual> root, float dpi);
     void SetOrg(Organizer* org) { org_ = org; }
@@ -115,8 +117,7 @@ private:
     std::wstring rename_buf_;
     int rename_caret_ = 0;
     int rename_selA_ = 0, rename_selB_ = 0;   // 选中区间（selA<selB 时有选中）
-    int collapse_undo_box_ = -1;              // 刚被单击折叠、可被随后的双击撤销的格
-    bool collapse_undo_prev_ = false;         // 该格折叠前的状态（撤销用）
+    int collapse_pending_ = -1;               // 延时折叠中的格（双击则取消并改名）
     // 文件级拖动：按下文件行 → 移动超阈值即发起 OLE 拖动（拖出/拖到其他格）
     bool file_press_ = false;
     std::wstring pending_file_;
