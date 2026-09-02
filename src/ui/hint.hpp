@@ -7,7 +7,7 @@
 namespace lb {
 
 // 归位提示气泡：玻璃卡 + 「归位/忽略」按钮，右上角常驻可交互。
-// 复用 note_window 的分层窗口技术（GDI+ → UpdateLayeredWindow）。
+// 复用分层窗口技术（GDI+ → UpdateLayeredWindow）。
 class HintToast {
 public:
     // 显示提示。接受时调 on_accept(landings 副本)，忽略/超时/关闭调 on_dismiss。

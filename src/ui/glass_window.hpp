@@ -26,6 +26,8 @@ public:
     void OnTimer(std::function<void(HWND, UINT)> cb) { on_timer_ = std::move(cb); }
     // 鼠标消息（坐标已换算为 DIP）
     void OnMouse(std::function<void(UINT msg, float x, float y)> cb) { on_mouse_ = std::move(cb); }
+    // 滚轮（delta 为 120 的倍数；坐标已换算为 DIP）
+    void OnWheel(std::function<void(int delta, float x, float y)> cb) { on_wheel_ = std::move(cb); }
     // WM_APP 区段消息透传（托盘回调等），返回值作为 WndProc 结果
     void OnApp(std::function<LRESULT(UINT msg, WPARAM wp, LPARAM lp)> cb) { on_app_ = std::move(cb); }
     // 键盘输入（WM_CHAR/WM_KEYDOWN/WM_KILLFOCUS）→ 就地重命名等；返回 true 表示已处理
@@ -43,6 +45,7 @@ private:
     std::function<void(UINT id)> on_key_;
     std::function<void(HWND, UINT)> on_timer_;
     std::function<void(UINT, float, float)> on_mouse_;
+    std::function<void(int, float, float)> on_wheel_;
     std::function<LRESULT(UINT, WPARAM, LPARAM)> on_app_;
     std::function<bool(UINT, UINT)> on_keyboard_;
     std::function<int(float, float)> on_hittest_;

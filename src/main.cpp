@@ -18,7 +18,6 @@
 #include "ui/drop_target.hpp"
 #include "ui/glass_window.hpp"
 #include "ui/hint.hpp"
-#include "ui/note_window.hpp"
 #include "ui/spotlight.hpp"
 #include "ui/tray.hpp"
 
@@ -54,7 +53,6 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
     DesktopGrid grid;
     TrayIcon tray;
     Autostart autostart;
-    NoteWindow note;
     HintToast hint;
     Watcher watcher;
     std::vector<std::wstring> pendingBatch;   // watcher 批次的累积（UI 线程防抖）
@@ -82,10 +80,6 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
     // 顶层浮窗(independent/bottom)会被显示桌面最小化，故一律默认挂到桌面层(DesktopLayer)。
     DesktopMode mode = DesktopMode::DesktopLayer;
 
-    auto doUndo = [&] {
-        org.UndoLast();
-        grid.Refresh();
-    };
     auto toggleVisible = [&] {
         visible = !visible;
         ShowWindow(win.hwnd(), visible ? SW_SHOW : SW_HIDE);
@@ -166,6 +160,7 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
         grid.OnTimer(h, id);
     });
     win.OnMouse([&](UINT msg, float x, float y) { grid.OnMouse(win.hwnd(), msg, x, y); });
+    win.OnWheel([&](int delta, float x, float y) { grid.OnWheel(delta, x, y); });
     win.OnKeyboard([&](UINT msg, UINT wp) { return grid.OnKeyboard(msg, wp); });
     win.OnHitTest([&](float x, float y) {
         // 全窗 HTCLIENT：OLE 拖放周期性用 WM_NCHITTEST 复验目标，HTTRANSPARENT
@@ -260,7 +255,6 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
     // §5.1 P0：热键冲突一次性提示（托盘气泡，不阻塞主流程）
     if (ctrlSpaceFailed)
         tray.Balloon(L"热键冲突", L"Ctrl+Space 被占用，快速搜索暂不可用（可在设置后重试）。");
-    if (cmd && wcsstr(cmd, L"--note")) note.Toggle();  // 调试/自动化入口
 
     // 双击隐藏 运行时切换（托盘菜单调用）
     auto setHideMode = [&](const std::string& m) {
@@ -295,9 +289,6 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
             if (LOWORD(lp) == WM_RBUTTONUP) {
                 SetForegroundWindow(win.hwnd());
                 HMENU m = CreatePopupMenu();
-                AppendMenuW(m, MF_STRING, 2, L"撤销上次整理");
-                AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
-                AppendMenuW(m, MF_STRING, 5, L"新建便签");
                 AppendMenuW(m, MF_STRING, 7, L"快速搜索  (Ctrl+Space)");
                 // 双击隐藏 子菜单（hook|hotkey）
                 HMENU hideMenu = CreatePopupMenu();
@@ -321,12 +312,10 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
                 DestroyMenu(hideMenu);
                 DestroyMenu(m);
                 switch (cmd) {
-                case 2: doUndo(); break;
                 case 3: toggleVisible(); break;
                 case 4:
                     autostart.IsEnabled() ? autostart.Disable() : autostart.Enable();
                     break;
-                case 5: note.Toggle(); break;
                 case 7: spot.Toggle(); break;
                 case 31: setHideMode("hook"); break;
                 case 32: setHideMode("hotkey"); break;

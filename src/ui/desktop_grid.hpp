@@ -24,9 +24,11 @@ public:
     static constexpr float kHeaderH = 34.f, kRowH = 22.f, kPad = 12.f;
     static constexpr float kDateH = 26.f;  // 日程格日期条高
     static constexpr int kMaxRows = 12;
-    static constexpr UINT kTimerBase = 200;   // AnimateIn 逐格定时器
-    static constexpr UINT kCollapseTimer = 300;  // 单击格头折叠延时(约250ms)
-    static constexpr UINT kCollapseDelay = 250;  // ms
+    static constexpr UINT kTimerBase = 200;    // AnimateIn 逐格定时器
+    static constexpr UINT kCollapseTimer = 300;   // 单击格头折叠延时(约250ms)
+    static constexpr UINT kCaretTimer = 310;   // 编辑光标闪烁(530ms)
+    static constexpr UINT kCollapseDelay = 250;   // ms
+    static constexpr UINT kCaretBlink = 530;   // ms
 
     bool Init(GraphicsContext& gfx, ComPtr<IDCompositionVisual> root, float dpi);
     void SetOrg(Organizer* org) { org_ = org; }
@@ -59,6 +61,7 @@ public:
     void AnimateIn(HWND hwnd);         // 整理后逐格浮入（30ms stagger）
     void OnTimer(HWND hwnd, UINT id);
     void OnMouse(HWND hwnd, UINT msg, float x, float y);
+    void OnWheel(int delta, float x, float y);   // 鼠标滚轮：滚动光标所在格的内容
     // 就地重命名格名的键盘入口（玻璃窗 WM_CHAR/WM_KEYDOWN/WM_KILLFOCUS → 这里）
     bool OnKeyboard(UINT msg, UINT wp);
     int BoxAt(float x, float y) const; // 命中测试，客户区坐标（含 bbox 偏移换算）
@@ -72,6 +75,7 @@ private:
         std::vector<std::wstring> files;   // 绝对路径（已排序）
         bool collapsed = false;
         bool hovered = false;
+        int scroll = 0;                    // 内容滚动偏移（文件/事项超出上限时）
         D2D1_RECT_F rect{};                // DIP，grid 坐标
         ComPtr<IDCompositionVisual> visual;
     };
@@ -110,6 +114,9 @@ private:
     void LayoutGridPositions();  // 按槽位顺序排布（2 行，行高取该行最高）→ 写入 rect
     void Relayout();             // 计算 bbox 并更新视觉偏移；定位回调/自定位
     void RedrawBox(int i);
+    void DrawScroll(::ID2D1DeviceContext* ctx, float w, float y0, float y1, int shown,
+                    int total, int scroll, ::ID2D1Brush* track, ::ID2D1Brush* thumb) const;
+    void ClampScroll(Box& b);                    // 按内容量裁剪滚动偏移
     int RowIndexAt(const Box& b, float x, float y) const;   // -1=无  -2=头栏
     void OpenFile(const std::wstring& path) const;
     void RowMenu(HWND hwnd, int boxIdx, const std::wstring& path);  // 行右键：打开/位置/放回
@@ -148,6 +155,7 @@ private:
     std::wstring rename_buf_;
     int rename_caret_ = 0;
     int rename_selA_ = 0, rename_selB_ = 0;   // 选中区间（selA<selB 时有选中）
+    bool caret_on_ = true;                    // 编辑光标闪烁
     int collapse_pending_ = -1;               // 延时折叠中的格（双击则取消并改名）
     // 日程格（左上「文档」格）：当前选中日期 + 任务数据 + 就地编辑态
     int curY_ = 0, curM_ = 0, curD_ = 0;      // 当前选中日期（未初始化=今天）

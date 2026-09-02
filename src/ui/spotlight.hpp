@@ -38,6 +38,7 @@ private:
     std::vector<AppItem> hits_;
     std::wstring query_;
     int sel_ = 0;
+    bool caret_on_ = true;  // 光标闪烁（定时器切换）
     bool created_ = false;
 };
 

@@ -106,6 +106,14 @@ LRESULT GlassWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                             static_cast<short>(HIWORD(lp)) / self->dpi_ * 96.f);
         }
         return 0;
+    case WM_MOUSEWHEEL:
+        if (self && self->on_wheel_) {
+            POINT pt{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+            ScreenToClient(hwnd, &pt);
+            self->on_wheel_(GET_WHEEL_DELTA_WPARAM(wp),
+                            pt.x / self->dpi_ * 96.f, pt.y / self->dpi_ * 96.f);
+        }
+        return 0;
     case WM_KEYDOWN:
         if (self && self->on_keyboard_ && self->on_keyboard_(WM_KEYDOWN, static_cast<UINT>(wp)))
             return 0;

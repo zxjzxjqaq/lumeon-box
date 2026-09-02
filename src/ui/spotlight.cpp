@@ -55,6 +55,8 @@ void Spotlight::OnOpen() {
     files_ = filesFn_ ? filesFn_() : std::vector<std::wstring>{};
     query_.clear();
     sel_ = 0;
+    caret_on_ = true;
+    SetTimer(hwnd_, 1, 530, nullptr);  // 光标闪烁
     Refresh();  // 填充 hits_ 并整帧绘制
     MoveToTop();
     ShowWindow(hwnd_, SW_SHOW);
@@ -63,7 +65,10 @@ void Spotlight::OnOpen() {
 }
 
 void Spotlight::OnClose() {
-    if (hwnd_) ShowWindow(hwnd_, SW_HIDE);
+    if (hwnd_) {
+        KillTimer(hwnd_, 1);
+        ShowWindow(hwnd_, SW_HIDE);
+    }
 }
 
 void Spotlight::Refresh() {
@@ -133,8 +138,8 @@ void Spotlight::Draw() {
                             30.f);
         g.DrawString(disp.c_str(), (INT)disp.size(), &fQ, qbox, nullptr, &qtext);
 
-        // 静态光标：紧跟已输入文本
-        if (!query_.empty()) {
+        // 光标：紧跟已输入文本（闪烁）
+        if (!query_.empty() && caret_on_) {
             Gdiplus::RectF mf;
             g.MeasureString(query_.c_str(), (INT)query_.size(), &fQ, qbox, &mf);
             float cx = kPad + mf.Width + 2.f;
@@ -270,6 +275,12 @@ LRESULT CALLBACK Spotlight::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
         } else if (wp == VK_ESCAPE) {
             self->OnClose();
+        }
+        return 0;
+    case WM_TIMER:
+        if (wp == 1 && self) {  // 光标闪烁
+            self->caret_on_ = !self->caret_on_;
+            self->Draw();
         }
         return 0;
     case WM_LBUTTONDOWN: {

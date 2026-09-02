@@ -102,6 +102,8 @@ bool DesktopGrid::Init(GraphicsContext& gfx, ComPtr<IDCompositionVisual> root, f
         curM_ = m;
         curD_ = d;
         CancelTaskEdit();
+        for (int i = 0; i < kBoxCount; ++i)
+            if (IsTasksBox(boxes_[i])) boxes_[i].scroll = 0;  // 选新日期回到顶部
         Relayout();
         for (int i = 0; i < kBoxCount; ++i)
             if (IsTasksBox(boxes_[i])) RedrawBox(i);
@@ -227,6 +229,7 @@ std::vector<std::string> DesktopGrid::CollapsedKeys() const {
 
 void DesktopGrid::RedrawBox(int i) {
     Box& b = boxes_[i];
+    ClampScroll(b);
     bool active = b.hovered || static_cast<int>(i) == drag_box_;
     float w = kBoxW, h = HeightOf(b);
     auto surface = gfx_->DrawToSurface(w, h, dpi_, [&](::ID2D1DeviceContext* ctx, float) {
@@ -264,7 +267,8 @@ void DesktopGrid::RedrawBox(int i) {
                               tr, text.Get());
             float cx = tr.left + HeaderTextWidth(rename_buf_.substr(0, rename_caret_));
             if (cx > tr.right - 2) cx = tr.right - 2;
-            ctx->FillRectangle(D2D1::RectF(cx, 9.f, cx + 2.f, kHeaderH - 2), dim.Get());
+            if (caret_on_)
+                ctx->FillRectangle(D2D1::RectF(cx, 9.f, cx + 2.f, kHeaderH - 2), dim.Get());
         } else {
             std::wstring title = DisplayName(b.cat);
             ctx->DrawText(title.c_str(), (UINT32)title.size(), headerFmt_.Get(),
@@ -312,21 +316,23 @@ void DesktopGrid::RedrawBox(int i) {
             } else {
                 size_t rows = std::min<size_t>(b.files.size(), kMaxRows);
                 for (size_t r = 0; r < rows; ++r) {
-                    std::wstring name = Ellipsize(fs::path(b.files[r]).filename().wstring(), 19);
+                    int idx = b.scroll + (int)r;
+                    if (idx < 0 || idx >= (int)b.files.size()) break;
+                    std::wstring name =
+                        Ellipsize(fs::path(b.files[idx]).filename().wstring(), 19);
                     float y = kHeaderH + kPad * 0.4f + static_cast<float>(r) * kRowH;
-                    if (auto* icon = icons_.Get(ctx, b.files[r])) {
+                    if (auto* icon = icons_.Get(ctx, b.files[idx])) {
                         ctx->DrawBitmap(icon, D2D1::RectF(14.f, y + 3.f, 30.f, y + 19.f), 1.f,
                                         D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC);
                     }
                     ctx->DrawText(name.c_str(), (UINT32)name.size(), rowFmt_.Get(),
                                   {36.f, y, w - 12.f, y + kRowH + 3.f}, text.Get());
                 }
-                if (b.files.size() > kMaxRows) {
-                    std::wstring more = L"+ " + std::to_wstring(b.files.size() - kMaxRows) + L" 更多";
-                    float y = kHeaderH + kPad * 0.4f + static_cast<float>(kMaxRows) * kRowH;
-                    ctx->DrawText(more.c_str(), (UINT32)more.size(), rowFmt_.Get(),
-                                  {14.f, y, w - 12.f, y + kRowH + 3.f}, dim.Get());
-                }
+                // 超出上限 → 滚动条（滚轮滚动，不再裁切）
+                if (b.files.size() > kMaxRows)
+                    DrawScroll(ctx, w, kHeaderH + kPad * 0.4f,
+                               kHeaderH + kPad * 0.4f + rows * kRowH, (int)rows,
+                               (int)b.files.size(), b.scroll, hl.Get(), dim.Get());
             }
         }
     });
@@ -362,7 +368,9 @@ void DesktopGrid::DrawTasksBox(::ID2D1DeviceContext* ctx, int ti, float w, float
     size_t shown = lst ? std::min<size_t>(lst->size(), kMaxRows) : 0;
     float y0 = dy + kDateH + kPad * 0.4f;
     for (size_t r = 0; r < shown; ++r) {
-        const TaskRec& tk = (*lst)[r];
+        int idx = boxes_[ti].scroll + (int)r;
+        if (idx < 0 || idx >= (int)lst->size()) break;
+        const TaskRec& tk = (*lst)[idx];
         float ry = y0 + static_cast<float>(r) * kRowH;
         // 打勾框：未完成=描边，完成=青色填充+对勾
         D2D1_ROUNDED_RECT cb{{14.f, ry + 5.f, 28.f, ry + 19.f}, 3.f, 3.f};
@@ -376,7 +384,7 @@ void DesktopGrid::DrawTasksBox(::ID2D1DeviceContext* ctx, int ti, float w, float
         // 事项文本
         std::wstring nm = Ellipsize(tk.text, 18);
         auto* br = tk.done ? dim.Get() : text.Get();
-        if (tasks_editing_ && task_edit_box_ == ti && task_edit_row_ == (int)r) {
+        if (tasks_editing_ && task_edit_box_ == ti && task_edit_row_ == idx) {
             D2D1_RECT_F tr{36.f, ry, w - 10.f, ry + kRowH};
             if (task_selA_ < task_selB_) {
                 float sx = tr.left + RowTextWidth(task_buf_.substr(0, task_selA_));
@@ -389,7 +397,8 @@ void DesktopGrid::DrawTasksBox(::ID2D1DeviceContext* ctx, int ti, float w, float
                               text.Get());
             float cx = tr.left + RowTextWidth(task_buf_.substr(0, task_caret_));
             if (cx > tr.right - 2) cx = tr.right - 2;
-            ctx->FillRectangle(D2D1::RectF(cx, ry + 2.f, cx + 2.f, ry + kRowH - 3), dim.Get());
+            if (caret_on_)
+                ctx->FillRectangle(D2D1::RectF(cx, ry + 2.f, cx + 2.f, ry + kRowH - 3), dim.Get());
         } else {
             ctx->DrawText(nm.c_str(), (UINT32)nm.size(), rowFmt_.Get(),
                           {36.f, ry, w - 10.f, ry + kRowH + 3.f}, br);
@@ -411,12 +420,42 @@ void DesktopGrid::DrawTasksBox(::ID2D1DeviceContext* ctx, int ti, float w, float
         ctx->DrawText(shownStr.c_str(), (UINT32)shownStr.size(), rowFmt_.Get(), tr, text.Get());
         float cx = tr.left + RowTextWidth(pfx + task_buf_.substr(0, task_caret_));
         if (cx > tr.right - 2) cx = tr.right - 2;
-        ctx->FillRectangle(D2D1::RectF(cx, ay + 2.f, cx + 2.f, ay + kRowH - 3), dim.Get());
+        if (caret_on_)
+            ctx->FillRectangle(D2D1::RectF(cx, ay + 2.f, cx + 2.f, ay + kRowH - 3), dim.Get());
     } else {
         const std::wstring addHint = L"\uFF0B \u6DFB\u52A0\u4E8B\u9879";  // ＋ 添加事项
         ctx->DrawText(addHint.c_str(), (UINT32)addHint.size(), rowFmt_.Get(),
                       {14.f, ay, w - 10.f, ay + kRowH + 3.f}, dim.Get());
     }
+    // 事项超出上限 → 滚动条
+    if (lst && lst->size() > kMaxRows)
+        DrawScroll(ctx, w, y0, ay, (int)shown, (int)lst->size(), boxes_[ti].scroll, hl.Get(),
+                   dim.Get());
+}
+
+void DesktopGrid::DrawScroll(ID2D1DeviceContext* ctx, float w, float y0, float y1, int shown,
+                             int total, int scroll, ID2D1Brush* track, ID2D1Brush* thumb) const {
+    if (total <= shown) return;
+    float trackH = y1 - y0;
+    if (trackH <= 0) return;
+    ctx->FillRectangle(D2D1::RectF(w - 8.f, y0, w - 5.f, y1), track);  // 轨道
+    float th = std::max(6.f, trackH * ((float)shown / (float)total));  // 滑块
+    float ty = y0 + (trackH - th) * ((float)scroll / (float)(total - shown));
+    ctx->FillRectangle(D2D1::RectF(w - 8.f, ty, w - 5.f, ty + th), thumb);
+}
+
+void DesktopGrid::ClampScroll(Box& b) {
+    int total = 0;
+    if (IsTasksBox(b)) {
+        auto it = tasks_.find(SelectedKey());
+        total = it != tasks_.end() ? (int)it->second.size() : 0;
+    } else {
+        total = (int)b.files.size();
+    }
+    int shown = std::min(total, kMaxRows);
+    int maxScroll = std::max(0, total - shown);
+    if (b.scroll < 0) b.scroll = 0;
+    if (b.scroll > maxScroll) b.scroll = maxScroll;
 }
 
 void DesktopGrid::Refresh() {
@@ -424,12 +463,14 @@ void DesktopGrid::Refresh() {
     for (auto& b : boxes_) {
         if (IsTasksBox(b)) {  // 日程格不列文件
             b.files.clear();
+            b.scroll = 0;
             continue;
         }
         b.files = org_->FilesIn(b.cat);
         std::sort(b.files.begin(), b.files.end(), [](const std::wstring& a, const std::wstring& c) {
             return _wcsicmp(fs::path(a).filename().c_str(), fs::path(c).filename().c_str()) < 0;
         });
+        ClampScroll(b);
     }
     Relayout();
     for (int i = 0; i < kBoxCount; ++i) RedrawBox(i);
@@ -441,6 +482,8 @@ void DesktopGrid::ResetToToday() {
     curM_ = t.m;
     curD_ = t.d;
     CancelTaskEdit();
+    for (int i = 0; i < kBoxCount; ++i)
+        if (IsTasksBox(boxes_[i])) boxes_[i].scroll = 0;  // 回今天回到顶部
     Relayout();
     for (int i = 0; i < kBoxCount; ++i)
         if (IsTasksBox(boxes_[i])) RedrawBox(i);
@@ -512,7 +555,11 @@ void DesktopGrid::StartTaskEdit(int boxIdx, int rowIdx) {
     task_caret_ = (int)task_buf_.size();
     task_selA_ = 0;
     task_selB_ = (int)task_buf_.size();  // 全选，直接输入替换
-    if (hwnd_) SetFocus(hwnd_);
+    caret_on_ = true;
+    if (hwnd_) {
+        SetFocus(hwnd_);
+        SetTimer(hwnd_, kCaretTimer, kCaretBlink, nullptr);  // 光标闪烁
+    }
     RedrawBox(boxIdx);
 }
 
@@ -522,6 +569,7 @@ void DesktopGrid::CommitTaskEdit() {
     std::wstring txt = task_buf_;
     tasks_editing_ = false;
     task_edit_box_ = -1;
+    if (hwnd_) KillTimer(hwnd_, kCaretTimer);
     size_t a = txt.find_first_not_of(L" \t\r\n");  // 去首尾空白
     if (a != std::wstring::npos) {
         size_t b2 = txt.find_last_not_of(L" \t\r\n");
@@ -548,6 +596,7 @@ void DesktopGrid::CancelTaskEdit() {
     int boxIdx = task_edit_box_;
     tasks_editing_ = false;
     task_edit_box_ = -1;
+    if (hwnd_) KillTimer(hwnd_, kCaretTimer);
     RedrawBox(boxIdx);
 }
 
@@ -578,7 +627,9 @@ int DesktopGrid::RowIndexAt(const Box& b, float x, float y) const {
     int idx = static_cast<int>(relY / kRowH);
     size_t shown = std::min<size_t>(b.files.size(), kMaxRows);
     if (idx < 0 || idx >= static_cast<int>(shown)) return -1;
-    return idx;
+    int actual = b.scroll + idx;  // 滚动偏移 → 实际下标
+    if (actual < 0 || actual >= (int)b.files.size()) return -1;
+    return actual;
 }
 
 DesktopGrid::TaskHit DesktopGrid::TaskHitTest(const Box& b, float x, float y,
@@ -602,7 +653,7 @@ DesktopGrid::TaskHit DesktopGrid::TaskHitTest(const Box& b, float x, float y,
     size_t shown = lst ? std::min<size_t>(lst->size(), kMaxRows) : 0;
     if (idx < 0) return TaskHit::None;
     if ((size_t)idx < shown) {
-        taskIdx = idx;
+        taskIdx = b.scroll + idx;  // 滚动偏移 → 实际下标
         if (lx <= 36.f) return TaskHit::Check;  // 打勾区
         return TaskHit::Row;
     }
@@ -690,7 +741,11 @@ void DesktopGrid::StartRename(int boxIdx) {
     rename_caret_ = (int)rename_buf_.size();
     rename_selA_ = 0;
     rename_selB_ = (int)rename_buf_.size();  // 打开即全选，直接输入替换
-    if (hwnd_) SetFocus(hwnd_);
+    caret_on_ = true;
+    if (hwnd_) {
+        SetFocus(hwnd_);
+        SetTimer(hwnd_, kCaretTimer, kCaretBlink, nullptr);  // 光标闪烁
+    }
     RedrawBox(boxIdx);
 }
 
@@ -698,6 +753,7 @@ void DesktopGrid::CommitRename() {
     if (!renaming_) return;
     int boxIdx = rename_box_;
     renaming_ = false;
+    if (hwnd_) KillTimer(hwnd_, kCaretTimer);
     std::wstring key = CategoryKey(boxes_[boxIdx].cat);
     std::wstring name = rename_buf_;
     if (!name.empty() && name != DisplayName(boxes_[boxIdx].cat)) {
@@ -711,6 +767,7 @@ void DesktopGrid::CancelRename() {
     if (!renaming_) return;
     int boxIdx = rename_box_;
     renaming_ = false;
+    if (hwnd_) KillTimer(hwnd_, kCaretTimer);
     RedrawBox(boxIdx);
 }
 
@@ -927,6 +984,7 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
                 curM_ = d.m;
                 curD_ = d.d;
                 CancelTaskEdit();
+                boxes_[b].scroll = 0;  // 换日期回到顶部
                 Relayout();
                 for (int i = 0; i < kBoxCount; ++i)
                     if (IsTasksBox(boxes_[i])) RedrawBox(i);
@@ -1116,6 +1174,30 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
     }
 }
 
+void DesktopGrid::OnWheel(int delta, float x, float y) {
+    x += bbox_.left;  // 客户区 DIP → grid 坐标
+    y += bbox_.top;
+    int b = BoxAtGrid(x, y);
+    if (b < 0) return;
+    Box& bx = boxes_[b];
+    if (bx.collapsed) return;
+    int total = 0;
+    if (IsTasksBox(bx)) {
+        auto it = tasks_.find(SelectedKey());
+        if (it == tasks_.end()) return;
+        total = (int)it->second.size();
+    } else {
+        total = (int)bx.files.size();
+    }
+    int shown = std::min(total, kMaxRows);
+    if (total <= shown) return;  // 内容未超上限，无需滚动
+    int maxScroll = total - shown;
+    bx.scroll -= (delta / 120) * 2;  // 每格滚 2 行；上滚(正值)向开头，下滚(负值)向末尾
+    if (bx.scroll < 0) bx.scroll = 0;
+    if (bx.scroll > maxScroll) bx.scroll = maxScroll;
+    RedrawBox(b);
+}
+
 void DesktopGrid::AnimateIn(HWND hwnd) {
     for (UINT i = 0; i < kBoxCount; ++i)
         SetTimer(hwnd, kTimerBase + i, 30 * i, nullptr);
@@ -1123,6 +1205,12 @@ void DesktopGrid::AnimateIn(HWND hwnd) {
 }
 
 void DesktopGrid::OnTimer(HWND hwnd, UINT id) {
+    if (id == kCaretTimer) {  // 编辑光标闪烁
+        caret_on_ = !caret_on_;
+        if (renaming_) RedrawBox(rename_box_);
+        else if (tasks_editing_) RedrawBox(task_edit_box_);
+        return;
+    }
     if (id == kCollapseTimer) {  // 单击格头延时折叠（双击则取消并改名，避免闪烁）
         KillTimer(hwnd, kCollapseTimer);
         if (collapse_pending_ >= 0) {
