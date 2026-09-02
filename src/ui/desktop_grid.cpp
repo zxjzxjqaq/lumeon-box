@@ -1,6 +1,7 @@
 #include "ui/desktop_grid.hpp"
 #include "ui/file_drag.hpp"
 #include "ui/input_box.hpp"
+#include "ui/calendar.hpp"
 #include <algorithm>
 #include <fstream>
 #include <wchar.h>
@@ -96,6 +97,16 @@ bool DesktopGrid::Init(GraphicsContext& gfx, ComPtr<IDCompositionVisual> root, f
     curM_ = t.m;
     curD_ = t.d;
     LoadTasks();
+    calendar_.SetOnPick([this](int y, int m, int d) {
+        curY_ = y;
+        curM_ = m;
+        curD_ = d;
+        CancelTaskEdit();
+        Relayout();
+        for (int i = 0; i < kBoxCount; ++i)
+            if (IsTasksBox(boxes_[i])) RedrawBox(i);
+        SaveTasks();
+    });
     gfx.device->Commit();
     return true;
 }
@@ -179,7 +190,9 @@ void DesktopGrid::SetBoxNames(const std::map<std::string, std::string>& names) {
 
 std::wstring DesktopGrid::DisplayName(Category c) const {
     auto it = boxNames_.find(CategoryKey(c));
-    return it != boxNames_.end() && !it->second.empty() ? it->second : CategoryName(c);
+    if (it != boxNames_.end() && !it->second.empty()) return it->second;
+    if (c == Category::Doc) return L"待办事项";  // 日程格默认名
+    return CategoryName(c);
 }
 
 void DesktopGrid::SetSlots(const std::vector<std::string>& order,
@@ -889,6 +902,7 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
         break;
     }
     case WM_LBUTTONDOWN: {
+        calendar_.Close();  // 点别处先关月历
         if (b >= 0 && IsTasksBox(boxes_[b])) {  // 日程格：日期导航/打勾/添加，其余交拖动
             int tk = -1;
             TaskHit th = TaskHitTest(boxes_[b], x, y, tk);
@@ -932,9 +946,17 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
                 StartTaskEdit(b, -1);
                 break;
             case TaskHit::Row:
-            case TaskHit::DateLabel:
+                break;  // 单击行不动；双击编辑；右键删除
+            case TaskHit::DateLabel: {  // 点日期 → 打开月历选择
+                POINT pt{
+                    (LONG)((boxes_[b].rect.left + kPad - bbox_.left) * dpi_),
+                    (LONG)((boxes_[b].rect.top + kHeaderH + kDateH + 4.f) * dpi_)};
+                ClientToScreen(hwnd_, &pt);
+                calendar_.Open(hwnd_, curY_, curM_, curD_, pt.x, pt.y);
+                break;
+            }
             default:
-                break;  // 单击行/日期不动；双击编辑；右键删除
+                break;
             }
             break;
         }

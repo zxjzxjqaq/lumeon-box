@@ -6,6 +6,7 @@
 #include <vector>
 #include "ui/d2d_interop.hpp"
 #include "ui/icons.hpp"
+#include "ui/calendar.hpp"
 #include "core/config.hpp"
 #include "core/organizer.hpp"
 
@@ -158,6 +159,7 @@ private:
     std::wstring task_buf_;
     int task_caret_ = 0;
     int task_selA_ = 0, task_selB_ = 0;
+    Calendar calendar_;                        // 点击日期条 → 月历选择
     // 文件级拖动：按下文件行 → 移动超阈值即发起 OLE 拖动（拖出/拖到其他格）
     bool file_press_ = false;
     std::wstring pending_file_;
