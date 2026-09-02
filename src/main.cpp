@@ -257,20 +257,6 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
     if (ctrlSpaceFailed)
         tray.Balloon(L"热键冲突", L"Ctrl+Space 被占用，快速搜索暂不可用（可在设置后重试）。");
 
-    // 双击隐藏 运行时切换（托盘菜单调用）
-    auto setHideMode = [&](const std::string& m) {
-        cfg.hideIconsMode = m;
-        store.save(cfg);
-        if (m == "hook") {
-            UnregisterHotKey(win.hwnd(), 3);
-            if (!HideHookInstalled()) InstallHideHook(win.hwnd(), WM_APP + 3);
-        } else {
-            RemoveHideHook();
-            if (!RegisterHotKey(win.hwnd(), 3, MOD_CONTROL | MOD_ALT, 'H'))
-                StageTrace("hotkey-H-register-FAILED");
-        }
-    };
-
     win.OnApp([&](UINT msg, WPARAM wp, LPARAM lp) -> LRESULT {
         if (msg == WM_APP + 3) {  // 双击桌面空白 → 切换图标显隐（钩子路径）
             ToggleDesktopIcons();
@@ -291,15 +277,6 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
                 SetForegroundWindow(win.hwnd());
                 HMENU m = CreatePopupMenu();
                 AppendMenuW(m, MF_STRING, 7, L"快速搜索  (Ctrl+Space)");
-                // 双击隐藏 子菜单（hook|hotkey）
-                HMENU hideMenu = CreatePopupMenu();
-                AppendMenuW(hideMenu,
-                            MF_STRING | (cfg.hideIconsMode == "hook" ? MF_CHECKED : 0),
-                            31, L"双击空白（钩子）");
-                AppendMenuW(hideMenu,
-                            MF_STRING | (cfg.hideIconsMode == "hotkey" ? MF_CHECKED : 0),
-                            32, L"热键 Ctrl+Alt+H");
-                AppendMenuW(m, MF_POPUP, (UINT_PTR)hideMenu, L"双击隐藏图标");
                 AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
                 AppendMenuW(m, MF_STRING | (autostart.IsEnabled() ? MF_CHECKED : 0u), 4,
                             L"开机自启");
@@ -310,7 +287,6 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
                 GetCursorPos(&pt);
                 int cmd = TrackPopupMenu(m, TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
                                          pt.x, pt.y, 0, win.hwnd(), nullptr);
-                DestroyMenu(hideMenu);
                 DestroyMenu(m);
                 switch (cmd) {
                 case 3: toggleVisible(); break;
@@ -318,8 +294,6 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
                     autostart.IsEnabled() ? autostart.Disable() : autostart.Enable();
                     break;
                 case 7: spot.Toggle(); break;
-                case 31: setHideMode("hook"); break;
-                case 32: setHideMode("hotkey"); break;
                 case 9: DestroyWindow(win.hwnd()); break;
                 }
             } else if (LOWORD(lp) == WM_LBUTTONDBLCLK) {
