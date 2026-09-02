@@ -138,14 +138,16 @@ void Spotlight::Draw() {
                             30.f);
         g.DrawString(disp.c_str(), (INT)disp.size(), &fQ, qbox, nullptr, &qtext);
 
-        // 光标：紧跟已输入文本（闪烁）
-        if (!query_.empty() && caret_on_) {
+        // 光标：打开即闪烁（空查询在起始位，有文字紧跟其后）
+        float cx = (Gdiplus::REAL)kPad;
+        if (!query_.empty()) {
             Gdiplus::RectF mf;
             g.MeasureString(query_.c_str(), (INT)query_.size(), &fQ, qbox, &mf);
-            float cx = kPad + mf.Width + 2.f;
+            cx = (Gdiplus::REAL)kPad + mf.Width + 2.f;
+        }
+        if (caret_on_) {
             Gdiplus::SolidBrush caret(Gdiplus::Color(220, 34, 211, 238));
-            g.FillRectangle(&caret,
-                            Gdiplus::RectF(cx, 17.f, 2.f, 18.f));
+            g.FillRectangle(&caret, Gdiplus::RectF(cx, 17.f, 2.f, 18.f));
         }
         // 提示 + 关闭按钮
         Gdiplus::SolidBrush hint(Gdiplus::Color(120, 255, 255, 255));
