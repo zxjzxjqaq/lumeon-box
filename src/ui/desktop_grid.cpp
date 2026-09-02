@@ -443,11 +443,12 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
     int b = BoxAtGrid(x, y);
     switch (msg) {
     case WM_MOUSEMOVE: {
-        if (file_press_) {  // 文件行按下：超过阈值即发起 OLE 文件拖动
+        if (file_press_) {  // 文件行按下：超过系统拖放阈值才发起 OLE 拖动（避免单击抖动误触发）
             POINT now{};
             GetCursorPos(&now);
             int dx = now.x - drag_cursor0_.x, dy = now.y - drag_cursor0_.y;
-            if (!drag_moved_ && (abs(dx) > 3 || abs(dy) > 3)) drag_moved_ = true;
+            int t = GetSystemMetrics(SM_CXDRAG);  // 系统“拖动”判定距离（默认 4px）
+            if (!drag_moved_ && (abs(dx) > t || abs(dy) > t)) drag_moved_ = true;
             if (drag_moved_) {
                 ReleaseCapture();
                 std::wstring p = pending_file_;
@@ -455,7 +456,7 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
                 pending_file_.clear();
                 dragging_ = false;
                 box_drag_ = -1;
-                StartFileDrag(hwnd, p);  // 拖到桌面/资源管理器/其他格
+                StartFileDrag(p);  // 拖到桌面/资源管理器/其他格
                 Refresh();                // 放置后重新列格，纳入桌面/跨盒移动
             }
             return;

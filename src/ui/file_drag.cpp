@@ -198,13 +198,12 @@ private:
 
 }  // namespace
 
-DWORD StartFileDrag(HWND hwnd, const std::wstring& path) {
+DWORD StartFileDrag(const std::wstring& path) {
     if (path.empty()) return DROPEFFECT_NONE;
     auto* data = new FileData(path);
     auto* src = new DropSource();
     DWORD effect = DROPEFFECT_NONE;
-    // SHDoDragDrop：shell 优化的拖放，带系统拖图，对资源管理器/桌面目标更可靠
-    SHDoDragDrop(hwnd, data, src, DROPEFFECT_MOVE | DROPEFFECT_COPY, &effect);
+    DoDragDrop(data, src, DROPEFFECT_MOVE | DROPEFFECT_COPY, &effect);
     data->Release();  // 释放我方引用（DoDragDrop 内部已平衡引用）
     src->Release();
     return effect;
