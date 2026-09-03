@@ -1,6 +1,7 @@
 #include "ui/shell_ctx_menu.hpp"
 #include <shellapi.h>
 #include <shobjidl.h>
+#include <exdisp.h>
 #include <cwchar>
 #pragma comment(lib, "shell32")
 #pragma comment(lib, "ole32")
@@ -30,13 +31,30 @@ bool ShellCtxMenu::Build(HWND hwnd, const std::wstring& path) {
 }
 
 bool ShellCtxMenu::BuildDesktop(HWND hwnd) {
+    // 桌面背景菜单：经桌面 shell 视图取 SVGIO_BACKGROUND（与资源管理器右键桌面一致）。
+    // 不能用桌面 IShellFolder::GetUIObjectOf(0)（那会拿到「桌面当文件夹」的菜单）。
     ComPtr<IContextMenu> cm;
-    // 桌面背景菜单：桌面 IShellFolder 的 IContextMenu（0 项 = 背景）
-    ComPtr<IShellFolder> desktop;
-    if (SUCCEEDED(SHGetDesktopFolder(&desktop)) && desktop)
-        desktop->GetUIObjectOf(hwnd, 0, nullptr, IID_IContextMenu, nullptr,
-                               reinterpret_cast<void**>(cm.GetAddressOf()));
-    if (!cm) return false;
+    ComPtr<IShellWindows> sw;
+    if (SUCCEEDED(CoCreateInstance(CLSID_ShellWindows, nullptr, CLSCTX_ALL,
+                                   IID_PPV_ARGS(&sw))) && sw) {
+        VARIANT vEmpty;
+        VariantInit(&vEmpty);
+        long hd = 0;
+        ComPtr<IDispatch> disp;
+        if (SUCCEEDED(sw->FindWindowSW(&vEmpty, &vEmpty, SWC_DESKTOP, &hd, SWFO_NEEDDISPATCH,
+                                       &disp)) && disp) {
+            ComPtr<IShellBrowser> browser;
+            if (SUCCEEDED(disp.As(&browser)) && browser) {
+                ComPtr<IShellView> view;
+                if (SUCCEEDED(browser->QueryActiveShellView(&view)) && view) {
+                    view->GetItemObject(SVGIO_BACKGROUND, IID_PPV_ARGS(&cm));
+                    shell_view_ = view;         // 视图随菜单存活
+                    shell_browser_ = browser;
+                }
+            }
+        }
+    }
+    if (!cm) return false;  // 拿不到背景菜单就不弹（避免显示错误的文件夹菜单）
     cm.As(&cm2_);
     cm.As(&cm3_);
     cm1_ = cm;
@@ -101,6 +119,8 @@ void ShellCtxMenu::Reset() {
     cm1_.Reset();
     cm2_.Reset();
     cm3_.Reset();
+    shell_view_.Reset();
+    shell_browser_.Reset();
     is_desktop_ = false;
 }
 

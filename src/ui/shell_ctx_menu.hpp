@@ -30,6 +30,9 @@ private:
     ComPtr<IContextMenu> cm1_;
     ComPtr<IContextMenu2> cm2_;
     ComPtr<IContextMenu3> cm3_;
+    // 桌面背景菜单依赖其所属的浏览器/视图，保留到菜单关闭，避免被释放后失效
+    ComPtr<IShellView> shell_view_;
+    ComPtr<IShellBrowser> shell_browser_;
 };
 
 }  // namespace lb
