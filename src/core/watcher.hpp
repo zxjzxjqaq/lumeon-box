@@ -42,7 +42,8 @@ private:
     HWND notify_ = nullptr;
     UINT msg_ = 0;
     bool recursive_ = false;
-    HANDLE dir_handle_ = INVALID_HANDLE_VALUE;   // 主线程打开，Stop 关闭（解除阻塞读）
+    HANDLE dir_handle_ = INVALID_HANDLE_VALUE;   // 主线程打开，Stop 时 CancelIoEx+关闭（解除阻塞读）
+    HANDLE cancel_event_ = nullptr;              // Stop 置位以唤醒等待中的线程（覆盖竞态）
     std::thread th_;
     std::atomic<bool> running_{false};
 };

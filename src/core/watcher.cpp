@@ -51,12 +51,15 @@ bool Watcher::Start(const std::wstring& dir, HWND notify, UINT msg, bool recursi
     notify_ = notify;
     msg_ = msg;
     recursive_ = recursive;
-    // 打开目录侦听句柄（主线程），Stop 时关闭以解除阻塞读；worker 用其本地副本
+    cancel_event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     dir_handle_ = CreateFileW(dir.c_str(), FILE_LIST_DIRECTORY,
                               FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                               nullptr, OPEN_EXISTING,
-                              FILE_FLAG_BACKUP_SEMANTICS, nullptr);
-    if (dir_handle_ == INVALID_HANDLE_VALUE) return false;
+                              FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED, nullptr);
+    if (dir_handle_ == INVALID_HANDLE_VALUE) {
+        if (cancel_event_) { CloseHandle(cancel_event_); cancel_event_ = nullptr; }
+        return false;
+    }
     running_ = true;
     th_ = std::thread(&Watcher::ThreadProc, this);
     return true;
@@ -65,9 +68,14 @@ bool Watcher::Start(const std::wstring& dir, HWND notify, UINT msg, bool recursi
 void Watcher::Stop() {
     running_ = false;
     HANDLE d = dir_handle_;
-    if (d != INVALID_HANDLE_VALUE) CloseHandle(d);  // 阻断中的 ReadDirectoryChangesW 随即失败返回
+    // OVERLAPPED 读：CancelIoEx 让挂起的 ReadDirectoryChangesW 立即以 ERROR_OPERATION_ABORTED 完成；
+    // 置位取消事件覆盖「尚未发起下一读」的竞态，保证线程必醒。
+    if (d != INVALID_HANDLE_VALUE) CancelIoEx(d, nullptr);
+    if (cancel_event_) SetEvent(cancel_event_);
+    if (th_.joinable()) th_.join();              // 线程随后退出，join 才返回
+    if (d != INVALID_HANDLE_VALUE) CloseHandle(d);
     dir_handle_ = INVALID_HANDLE_VALUE;
-    if (th_.joinable()) th_.join();
+    if (cancel_event_) { CloseHandle(cancel_event_); cancel_event_ = nullptr; }
 }
 
 DWORD WINAPI Watcher::ThreadProc(void* p) {
@@ -76,7 +84,7 @@ DWORD WINAPI Watcher::ThreadProc(void* p) {
 }
 
 void Watcher::ThreadMain() {
-    HANDLE dir = dir_handle_;   // 本地副本：Stop 关闭后，后续读立即失败（无成员竞争）
+    HANDLE dir = dir_handle_;   // 本地副本：Stop 关闭后不再使用（线程已退出）
     if (dir == INVALID_HANDLE_VALUE) {
         running_ = false;
         return;
@@ -84,13 +92,20 @@ void Watcher::ThreadMain() {
     const DWORD flags = FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME |
                         FILE_NOTIFY_CHANGE_CREATION;
     char buf[64 * 1024];
+    OVERLAPPED ov{};
+    ov.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    HANDLE waits[2] = { ov.hEvent, cancel_event_ };
     while (running_) {
         DWORD bytes = 0;
-        if (!ReadDirectoryChangesW(dir, buf, sizeof buf, recursive_ ? TRUE : FALSE, flags, &bytes,
-                                   nullptr, nullptr)) {
-            if (GetLastError() == ERROR_OPERATION_ABORTED || !running_) break;
-            break;  // 其它错误：结束监听（静默降级）
-        }
+        BOOL ok = ReadDirectoryChangesW(dir, buf, sizeof buf, recursive_ ? TRUE : FALSE, flags,
+                                        nullptr, &ov, nullptr);
+        if (!ok && GetLastError() != ERROR_IO_PENDING) break;  // 无法发起读
+        DWORD w = WaitForMultipleObjects(2, waits, FALSE, INFINITE);
+        if (w != WAIT_OBJECT_0) break;                           // 取消事件信令 → 停止
+        if (!GetOverlappedResult(dir, &ov, &bytes, FALSE)) break; // 被取消/失败 → 停止
+        ResetEvent(ov.hEvent);
+        if (!running_) break;
+
         auto* batch = new std::vector<std::wstring>();
         DWORD off = 0;
         for (;;) {
@@ -108,6 +123,7 @@ void Watcher::ThreadMain() {
         if (!PostMessageW(notify_, msg_, 0, reinterpret_cast<LPARAM>(batch)))
             delete batch;  // 目标窗口已销毁：释放，避免泄漏
     }
+    if (ov.hEvent) CloseHandle(ov.hEvent);
     running_ = false;
 }
 
