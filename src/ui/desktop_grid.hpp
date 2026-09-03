@@ -126,6 +126,7 @@ private:
     void OpenFile(const std::wstring& path) const;
     void RowMenu(HWND hwnd, int boxIdx, const std::wstring& path);  // 行右键：打开/位置/放回
     void HeaderMenu(HWND hwnd, int boxIdx);                 // 头栏右键：重命名/清空
+    void DesktopMenuFallback(HWND hwnd);                    // 桌面背景菜单取不到时：兜底桌面式菜单
     std::wstring DisplayName(const Box& b) const;               // 该盒显示名（就地编辑后的 name）
     std::wstring EllipsizeW(const std::wstring& s, float maxW) const;  // 按像素宽度截断+省略号
     void StartRename(int boxIdx);     // 就地编辑格名（双击头栏 / 托盘新建后调用）

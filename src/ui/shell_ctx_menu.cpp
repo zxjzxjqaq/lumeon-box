@@ -44,7 +44,7 @@ bool ShellCtxMenu::BuildDesktop(HWND hwnd) {
         if (SUCCEEDED(sw->FindWindowSW(&vEmpty, &vEmpty, SWC_DESKTOP, &hd, SWFO_NEEDDISPATCH,
                                        &disp)) && disp) {
             ComPtr<IShellBrowser> browser;
-            if (SUCCEEDED(disp.As(&browser)) && browser) {
+            if (SUCCEEDED(disp->QueryInterface(IID_PPV_ARGS(&browser))) && browser) {
                 ComPtr<IShellView> view;
                 if (SUCCEEDED(browser->QueryActiveShellView(&view)) && view) {
                     view->GetItemObject(SVGIO_BACKGROUND, IID_PPV_ARGS(&cm));
@@ -54,7 +54,7 @@ bool ShellCtxMenu::BuildDesktop(HWND hwnd) {
             }
         }
     }
-    if (!cm) return false;  // 拿不到背景菜单就不弹（避免显示错误的文件夹菜单）
+    if (!cm) return false;  // 拿不到背景菜单 → 宿主改用兜底菜单
     cm.As(&cm2_);
     cm.As(&cm3_);
     cm1_ = cm;

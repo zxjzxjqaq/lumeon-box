@@ -11,6 +11,7 @@
 #include "core/stage_log.hpp"
 #include <filesystem>
 #include <shellapi.h>
+#include <shlobj.h>
 #include <dwrite.h>
 #pragma comment(lib, "shell32")
 #pragma comment(lib, "dwrite")
@@ -768,6 +769,83 @@ void DesktopGrid::RowMenu(HWND hwnd, int boxIdx, const std::wstring& path) {
     }
 }
 
+// —— 桌面背景菜单取不到时的兜底：桌面式常用操作 ——
+static std::wstring DesktopPath() {
+    wchar_t buf[MAX_PATH]{};
+    if (FAILED(SHGetFolderPathW(nullptr, CSIDL_DESKTOPDIRECTORY, nullptr, 0, buf))) return {};
+    return buf;
+}
+
+static void RevealInExplorer(const std::wstring& p) {
+    ShellExecuteW(nullptr, L"open", L"explorer.exe", (L"/select,\"" + p + L"\"").c_str(),
+                  nullptr, SW_SHOWNORMAL);
+}
+
+void DesktopGrid::DesktopMenuFallback(HWND hwnd) {
+    POINT pt;
+    GetCursorPos(&pt);
+    HMENU m = CreatePopupMenu();
+    AppendMenuW(m, MF_STRING, 1, L"刷新");
+    AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+    HMENU nm = CreatePopupMenu();
+    AppendMenuW(nm, MF_STRING, 11, L"文件夹");
+    AppendMenuW(nm, MF_STRING, 12, L"文本文档");
+    AppendMenuW(m, MF_POPUP, (UINT_PTR)nm, L"新建");
+    AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(m, MF_STRING, 2, L"显示设置");
+    AppendMenuW(m, MF_STRING, 3, L"个性化");
+    SetForegroundWindow(hwnd);
+    int cmd = TrackPopupMenu(m, TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
+                             pt.x, pt.y, 0, hwnd, nullptr);
+    DestroyMenu(m);
+    switch (cmd) {
+    case 1: {  // 刷新桌面
+        ITEMIDLIST* pidl = nullptr;
+        if (SUCCEEDED(SHGetFolderLocation(nullptr, CSIDL_DESKTOPDIRECTORY, nullptr, 0, &pidl)) && pidl) {
+            SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_IDLIST, pidl, nullptr);
+            CoTaskMemFree(pidl);
+        }
+        break;
+    }
+    case 11: {  // 新建文件夹（桌面）
+        std::wstring desk = DesktopPath();
+        if (desk.empty()) break;
+        std::error_code ec;
+        for (int n = 1; ; ++n) {
+            std::wstring name = n == 1 ? L"新建文件夹"
+                                       : (L"新建文件夹(" + std::to_wstring(n) + L")");
+            std::wstring p = desk + L"\\" + name;
+            if (fs::exists(p, ec)) continue;
+            if (fs::create_directory(p, ec) && !ec) { RevealInExplorer(p); break; }
+            break;
+        }
+        break;
+    }
+    case 12: {  // 新建文本文档（桌面）
+        std::wstring desk = DesktopPath();
+        if (desk.empty()) break;
+        std::error_code ec;
+        for (int n = 1; ; ++n) {
+            std::wstring name = n == 1 ? L"新建文本文档.txt"
+                                       : (L"新建文本文档(" + std::to_wstring(n) + L").txt");
+            std::wstring p = desk + L"\\" + name;
+            if (fs::exists(p, ec)) continue;
+            std::ofstream f(fs::path(p), std::ios::binary);
+            if (f) { f.close(); RevealInExplorer(p); }
+            break;
+        }
+        break;
+    }
+    case 2:
+        ShellExecuteW(nullptr, L"open", L"ms-settings:display", nullptr, nullptr, SW_SHOWNORMAL);
+        break;
+    case 3:
+        ShellExecuteW(nullptr, L"open", L"ms-settings:personalization", nullptr, nullptr,
+                      SW_SHOWNORMAL);
+        break;
+    }
+}
+
 LRESULT DesktopGrid::OnShellMenuMsg(UINT msg, WPARAM wp, LPARAM lp) {
     if (shell_menu_) return shell_menu_->HandleMsg(msg, wp, lp);
     return 0;
@@ -1268,6 +1346,8 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
                 GetCursorPos(&pt);
                 shell_menu_->Show(hwnd, pt.x, pt.y);
                 shell_menu_->Reset();
+            } else {
+                DesktopMenuFallback(hwnd);  // 拿不到系统背景菜单 → 兜底桌面式菜单
             }
         }
         break;
