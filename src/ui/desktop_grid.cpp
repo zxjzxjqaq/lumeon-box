@@ -238,6 +238,10 @@ int DesktopGrid::AddBox(const std::wstring& name) {
 void DesktopGrid::RemoveBox(int i) {
     if (i < 0 || i >= (int)boxes_.size()) return;
     if (boxes_[i].isTasks) return;  // 待办盒不可删
+    if (org_ && !boxes_[i].folder.empty()) {
+        std::error_code ec;
+        fs::remove(org_->FolderDir(boxes_[i].folder), ec);  // 仅空目录可删，文件已放回桌面
+    }
     if (root_ && boxes_[i].visual) root_->RemoveVisual(boxes_[i].visual.Get());
     boxes_.erase(boxes_.begin() + i);  // 目录与文件保留（删盒不清文件）
     Relayout();
@@ -720,9 +724,12 @@ void DesktopGrid::RowMenu(HWND hwnd, int boxIdx, const std::wstring& path) {
 
 void DesktopGrid::HeaderMenu(HWND hwnd, int boxIdx) {
     if (boxIdx < 0 || boxIdx >= (int)boxes_.size()) return;
+    bool tasks = boxes_[boxIdx].isTasks;
     HMENU m = CreatePopupMenu();
     AppendMenuW(m, MF_STRING, 1, L"重命名此格…");
     AppendMenuW(m, MF_STRING, 2, L"清空此格（放回桌面）");
+    AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(m, MF_STRING | (tasks ? MF_DISABLED : 0), 3, L"删除此容器…");
     POINT pt;
     GetCursorPos(&pt);
     SetForegroundWindow(hwnd);
@@ -736,6 +743,20 @@ void DesktopGrid::HeaderMenu(HWND hwnd, int boxIdx) {
     case 2:
         if (on_clear_box_) on_clear_box_(boxIdx);
         break;
+    case 3: {  // 删除容器：文件先放回桌面，再删盒子（待办不可删）
+        if (tasks) break;
+        std::wstring msg =
+            L"\u786E\u5B9A\u5220\u9664\u5BB9\u5668\u300C" + boxes_[boxIdx].name +
+            L"\u300D\u5417\uFF1F\n\u5176\u4E2D\u7684\u6587\u4EF6\u4F1A\u653E\u56DE\u684C\u9762\u3002";  // 确定删除容器「X」吗？\n其中的文件会放回桌面。
+        if (MessageBoxW(hwnd, msg.c_str(), L"LumenBox", MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) !=
+            IDYES)
+            break;
+        if (!boxes_[boxIdx].folder.empty() && org_)
+            for (auto& p : org_->FilesInFolder(boxes_[boxIdx].folder)) org_->MoveBackToDesktop(p);
+        RemoveBox(boxIdx);
+        Refresh();
+        break;
+    }
     }
 }
 
