@@ -379,6 +379,18 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR lpCmdLine, int) {
     if (!SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2))
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_SYSTEM_AWARE);
 
+    // 单实例：命名互斥体。第二次启动会 ERROR_ALREADY_EXISTS → 唤醒已开窗口并退出本次。
+    HANDLE inst = CreateMutexW(nullptr, TRUE, L"LumenBox_SingleInstanceMutex");
+    if (inst && GetLastError() == ERROR_ALREADY_EXISTS) {
+        HWND w = FindWindowW(L"LumenBoxGlass", nullptr);
+        if (w) {
+            ShowWindow(w, SW_RESTORE);
+            SetForegroundWindow(w);
+        }
+        CloseHandle(inst);
+        return 0;  // 已有实例在运行，本次直接退出，避免多开
+    }
+
     int exit_code = 0;
     std::string err;
     try {
@@ -388,5 +400,6 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR lpCmdLine, int) {
         err = e.what();
     }
     if (!err.empty()) MessageBoxA(nullptr, err.c_str(), "LumenBox 异常", MB_ICONERROR);
+    if (inst) CloseHandle(inst);  // 释放互斥体，允许下个实例启动
     return exit_code;
 }
