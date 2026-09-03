@@ -69,7 +69,8 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
     Spotlight spot;
     spot.SetApps(&appIndex);
     spot.SetFilesFn([&]() -> std::vector<std::wstring> {
-        // 只搜「容器内」的文件：各数据容器文件夹（跳过待办盒与根目录 config/tasks）
+        // 只搜「容器内」的内容：各数据容器文件夹（跳过待办盒与根目录 config/tasks）。
+        // 文件与文件夹都作为候选命中项（不向下递归目录）。
         std::vector<std::wstring> out;
         std::error_code ec;
         int n = grid.BoxCount();
@@ -80,7 +81,7 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
             std::wstring dir = org.FolderDir(folder);
             for (fs::directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec), end;
                  !ec && it != end; it.increment(ec))
-                if (!it->is_directory(ec)) out.push_back(it->path().wstring());
+                out.push_back(it->path().wstring());
         }
         return out;
     });

@@ -173,3 +173,35 @@ TEST_CASE("隐藏文件不整理", "[organizer]") {
 
     SetFileAttributesW(hidden.c_str(), FILE_ATTRIBUTE_NORMAL);  // 便于清理
 }
+
+TEST_CASE("容器可收纳文件夹：拖入/枚举/放回", "[organizer]") {
+    Desk d;
+    Journal jr(d.jrPath.wstring());
+    RuleSet rules;
+    Organizer org(d.dir.wstring(), (d.dir / L"LumenBox").wstring(), rules, jr);
+
+    // 桌面上一个待收纳的文件夹（内含文件）
+    fs::path folder = d.dir / L"项目资料";
+    fs::create_directory(folder);
+    { std::ofstream o(folder / L"a.txt"); o << 'x'; }
+
+    // 拖进容器 box_b1 → 整个文件夹移入
+    REQUIRE(org.MoveToFolder(folder.wstring(), L"box_b1"));
+    fs::path inbox = d.dir / L"LumenBox" / L"box_b1" / L"项目资料";
+    REQUIRE(fs::exists(inbox));
+    REQUIRE(fs::exists(inbox / L"a.txt"));
+    REQUIRE_FALSE(fs::exists(folder));  // 原位已移走
+
+    // FilesInFolder 现在包含该文件夹
+    auto list = org.FilesInFolder(L"box_b1");
+    bool hasFolder = false;
+    for (auto& p : list) if (fs::path(p).filename() == L"项目资料") { hasFolder = true; break; }
+    REQUIRE(hasFolder);
+
+    // 放回桌面（文件夹整体还原）
+    REQUIRE(org.MoveBackToDesktop(inbox.wstring()));
+    REQUIRE(fs::exists(d.dir / L"项目资料"));
+    REQUIRE(fs::exists(d.dir / L"项目资料" / L"a.txt"));
+    REQUIRE_FALSE(fs::exists(inbox));
+}
+

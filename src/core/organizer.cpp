@@ -88,7 +88,7 @@ Organizer::Summary Organizer::OrganizeAll() {
 bool Organizer::MoveToCategory(const std::wstring& path, Category c) {
     if (c == Category::None) return false;
     std::error_code ec;
-    if (!fs::exists(path, ec) || fs::is_directory(path, ec)) return false;
+    if (!fs::exists(path, ec)) return false;
     // 已在目标盒目录：视为同盒（拖到自己所在盒），不动，避免生成 “(2)” 副本
     std::wstring dir = BoxDir(c);
     std::wstring parent = fs::path(path).parent_path().wstring();
@@ -100,7 +100,7 @@ bool Organizer::MoveToCategory(const std::wstring& path, Category c) {
 bool Organizer::MoveBackToDesktop(const std::wstring& path) {
     std::error_code ec;
     fs::path p(path);
-    if (!fs::exists(p, ec) || fs::is_directory(p, ec)) return false;
+    if (!fs::exists(p, ec)) return false;
     // 只接受 <container>\<类目>\ 内的文件，防止把任意路径当「放回」用
     std::wstring root = container_;
     std::wstring parent = p.parent_path().wstring();
@@ -120,7 +120,7 @@ std::vector<std::wstring> Organizer::FilesIn(Category c) const {
     for (fs::directory_iterator it(BoxDir(c), fs::directory_options::skip_permission_denied, ec),
          end;
          !ec && it != end; it.increment(ec)) {
-        if (!it->is_directory(ec)) out.push_back(it->path().wstring());
+        out.push_back(it->path().wstring());
     }
     return out;
 }
@@ -135,14 +135,14 @@ std::vector<std::wstring> Organizer::FilesInFolder(const std::wstring& folder) c
     for (fs::directory_iterator it(FolderDir(folder), fs::directory_options::skip_permission_denied, ec),
          end;
          !ec && it != end; it.increment(ec)) {
-        if (!it->is_directory(ec)) out.push_back(it->path().wstring());
+        out.push_back(it->path().wstring());
     }
     return out;
 }
 
 bool Organizer::MoveToFolder(const std::wstring& path, const std::wstring& folder) {
     std::error_code ec;
-    if (!fs::exists(path, ec) || fs::is_directory(path, ec)) return false;
+    if (!fs::exists(path, ec)) return false;
     std::wstring dir = FolderDir(folder);
     std::wstring parent = fs::path(path).parent_path().wstring();
     if (_wcsicmp(parent.c_str(), dir.c_str()) == 0) return false;  // 已在同盒不产生副本
