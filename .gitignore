@@ -2,3 +2,5 @@ build/
 *.user
 .vs/
 _docs_tmp/
+
+installer/
