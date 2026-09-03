@@ -12,8 +12,10 @@
 #include <filesystem>
 #include <shellapi.h>
 #include <shlobj.h>
+#include <propidl.h>
 #include <dwrite.h>
 #pragma comment(lib, "shell32")
+#pragma comment(lib, "advapi32")
 #pragma comment(lib, "dwrite")
 
 namespace lb {
@@ -781,17 +783,67 @@ static void RevealInExplorer(const std::wstring& p) {
                   nullptr, SW_SHOWNORMAL);
 }
 
+// 查看 -> 图标大小（经桌面文件夹视图对象；拿不到就改注册表并通知 shell 刷新）
+static void SetDesktopIconSize(int px) {
+    ComPtr<IShellFolder> desktop;
+    if (SUCCEEDED(SHGetDesktopFolder(&desktop)) && desktop) {
+        ComPtr<IFolderView2> fv2;
+        if (SUCCEEDED(desktop->CreateViewObject(nullptr, IID_PPV_ARGS(&fv2))) && fv2) {
+            fv2->SetViewModeAndIconSize(FVM_ICON, px);
+            return;
+        }
+    }
+    HKEY hk = nullptr;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER,
+                        L"Software\\Microsoft\\Windows\\Shell\\Bags\\1\\Desktop", 0, nullptr, 0,
+                        KEY_WRITE, nullptr, &hk, nullptr) == ERROR_SUCCESS && hk) {
+        DWORD v = (DWORD)px;
+        RegSetValueExW(hk, L"IconSize", 0, REG_DWORD, (const BYTE*)&v, sizeof(v));
+        RegCloseKey(hk);
+    }
+    SHChangeNotify(SHCNE_UPDATEITEM, SHCNF_IDLIST, nullptr, nullptr);
+}
+
+// 新建 -> 快捷方式（指向资源管理器）
+static void CreateDesktopShortcut() {
+    std::wstring desk = DesktopPath();
+    if (desk.empty()) return;
+    std::error_code ec;
+    for (int n = 1; ; ++n) {
+        std::wstring name = n == 1 ? L"新建快捷方式.lnk"
+                                   : (L"新建快捷方式(" + std::to_wstring(n) + L").lnk");
+        std::wstring p = desk + L"\\" + name;
+        if (fs::exists(p, ec)) continue;
+        ComPtr<IShellLinkW> link;
+        ComPtr<IPersistFile> pf;
+        if (SUCCEEDED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER,
+                                       IID_PPV_ARGS(&link))) &&
+            SUCCEEDED(link->SetPath(L"C:\\Windows\\explorer.exe")) &&
+            SUCCEEDED(link->SetDescription(L"新建快捷方式")) &&
+            SUCCEEDED(link.As(&pf)) && SUCCEEDED(pf->Save(p.c_str(), TRUE)))
+            RevealInExplorer(p);
+        break;
+    }
+}
+
 void DesktopGrid::DesktopMenuFallback(HWND hwnd) {
     POINT pt;
     GetCursorPos(&pt);
     HMENU m = CreatePopupMenu();
+    HMENU vm = CreatePopupMenu();
+    AppendMenuW(vm, MF_STRING, 21, L"大图标");
+    AppendMenuW(vm, MF_STRING, 22, L"中等图标");
+    AppendMenuW(vm, MF_STRING, 23, L"小图标");
+    AppendMenuW(m, MF_POPUP, (UINT_PTR)vm, L"查看");
     AppendMenuW(m, MF_STRING, 1, L"刷新");
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
     HMENU nm = CreatePopupMenu();
     AppendMenuW(nm, MF_STRING, 11, L"文件夹");
     AppendMenuW(nm, MF_STRING, 12, L"文本文档");
+    AppendMenuW(nm, MF_STRING, 13, L"快捷方式");
     AppendMenuW(m, MF_POPUP, (UINT_PTR)nm, L"新建");
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(m, MF_STRING, 4, L"打开终端");
     AppendMenuW(m, MF_STRING, 2, L"显示设置");
     AppendMenuW(m, MF_STRING, 3, L"个性化");
     SetForegroundWindow(hwnd);
@@ -799,6 +851,9 @@ void DesktopGrid::DesktopMenuFallback(HWND hwnd) {
                              pt.x, pt.y, 0, hwnd, nullptr);
     DestroyMenu(m);
     switch (cmd) {
+    case 21: SetDesktopIconSize(96); break;   // 大图标
+    case 22: SetDesktopIconSize(48); break;   // 中等图标
+    case 23: SetDesktopIconSize(32); break;   // 小图标
     case 1: {  // 刷新桌面
         ITEMIDLIST* pidl = nullptr;
         if (SUCCEEDED(SHGetFolderLocation(nullptr, CSIDL_DESKTOPDIRECTORY, nullptr, 0, &pidl)) && pidl) {
@@ -836,6 +891,11 @@ void DesktopGrid::DesktopMenuFallback(HWND hwnd) {
         }
         break;
     }
+    case 13: CreateDesktopShortcut(); break;
+    case 4:  // 打开终端（PowerShell，工作目录=桌面）
+        ShellExecuteW(nullptr, L"open", L"powershell.exe", nullptr,
+                      DesktopPath().c_str(), SW_SHOWNORMAL);
+        break;
     case 2:
         ShellExecuteW(nullptr, L"open", L"ms-settings:display", nullptr, nullptr, SW_SHOWNORMAL);
         break;
