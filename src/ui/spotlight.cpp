@@ -73,9 +73,7 @@ void Spotlight::OnClose() {
 
 void Spotlight::Refresh() {
     hits_.clear();
-    if (apps_) {
-        for (auto& a : apps_->Search(query_)) hits_.push_back(a);
-    }
+    // 只搜「容器内文件」：不返回应用/开始菜单等容器之外的内容
     for (auto& f : SearchFiles(files_, query_)) hits_.push_back(f);
     if (sel_ >= (int)hits_.size()) sel_ = (int)hits_.size() - 1;
     if (sel_ < 0) sel_ = 0;
@@ -285,6 +283,18 @@ LRESULT CALLBACK Spotlight::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             self->Draw();
         }
         return 0;
+    case WM_MOUSEMOVE: {  // 高亮跟随鼠标：悬停到哪行就选中哪行
+        float s = self->scale_ ? self->scale_ : 1.f;
+        int y = (int)(GET_Y_LPARAM(lp) / s);
+        if (y >= kHeaderH) {
+            int row = (y - kHeaderH) / kRowH;
+            if (row >= 0 && row < (int)self->hits_.size() && row != self->sel_) {
+                self->sel_ = row;
+                self->Draw();
+            }
+        }
+        return 0;
+    }
     case WM_LBUTTONDOWN: {
         float s = self->scale_ ? self->scale_ : 1.f;
         int x = (int)(GET_X_LPARAM(lp) / s), y = (int)(GET_Y_LPARAM(lp) / s);  // 逻辑坐标

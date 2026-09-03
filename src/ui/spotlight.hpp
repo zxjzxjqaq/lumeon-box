@@ -7,9 +7,9 @@
 
 namespace lb {
 
-// 快速搜索聚光灯（Ctrl+Space）：顶部深色玻璃条 + 结果列表（应用在前、桌面文件在后）。
+// 快速搜索聚光灯（Ctrl+Space）：顶部深色玻璃条 + 结果列表（仅容器内文件）。
 // 分层窗口（UpdateLayeredWindow）+ GDI+，静态光标，仅在内容变化时整帧原子重绘——
-// 无系统擦除、无定时器，避免闪烁；键盘直达（输入/上下/回车/Esc）。
+// 无系统擦除、无定时器，避免闪烁；键盘直达（输入/上下/回车/Esc），高亮随鼠标悬停移动。
 class Spotlight {
 public:
     bool Create(HINSTANCE hInst);
