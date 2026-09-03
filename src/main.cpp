@@ -180,10 +180,10 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
     });
 
     grid.SetOrg(&org);
+    grid.SetTasksFile(appData + L"\\tasks.json");  // 日程格数据（待办盒）— 须在 Init 前，Init 内部 LoadTasks
     grid.Init(win.gfx(), win.Root(), win.DpiScale());
     grid.SetBoxes(cfg.boxes);
     grid.SetWindowHandle(win.hwnd());
-    grid.SetTasksFile(appData + L"\\tasks.json");  // 日程格数据（待办盒）
     grid.SetOnExtent([&](float w, float h) {
         RECT work{};
         SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
