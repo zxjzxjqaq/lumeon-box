@@ -727,9 +727,14 @@ void DesktopGrid::RowMenu(HWND hwnd, int boxIdx, const std::wstring& path) {
     if (shell_menu_->Build(hwnd, path)) {
         POINT pt;
         GetCursorPos(&pt);
-        int custom = shell_menu_->Show(hwnd, pt.x, pt.y);
-        if (custom == (int)ShellCtxMenu::kCustomBackToDesktop) {
-            if (org_ && org_->MoveBackToDesktop(path)) Refresh();
+        int rc = shell_menu_->Show(hwnd, pt.x, pt.y);
+        if (rc == (int)ShellCtxMenu::kCustomBackToDesktop) {
+            if (org_ && org_->MoveBackToDesktop(path)) Refresh();  // 放回桌面 → 刷新
+        } else if (rc == (int)ShellCtxMenu::kCustomDelete) {
+            ShellCtxMenu::RecycleToBin(hwnd, path);  // 走回收站
+            Refresh();                               // 删除后实时刷新容器
+        } else if (rc == (int)ShellCtxMenu::kShellDone) {
+            Refresh();  // 外壳命令（改名/移动等）后刷新，保持容器状态同步
         }
         shell_menu_->Reset();
         return;
@@ -740,6 +745,7 @@ void DesktopGrid::RowMenu(HWND hwnd, int boxIdx, const std::wstring& path) {
     AppendMenuW(m, MF_STRING, 2, L"打开位置");
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(m, MF_STRING, 3, L"放回桌面");
+    AppendMenuW(m, MF_STRING, 4, L"删除（回收站）");
     POINT pt;
     GetCursorPos(&pt);
     SetForegroundWindow(hwnd);  // TrackPopupMenu 需要前台窗口才能正常收起
@@ -754,6 +760,10 @@ void DesktopGrid::RowMenu(HWND hwnd, int boxIdx, const std::wstring& path) {
         break;
     case 3:
         if (org_ && org_->MoveBackToDesktop(path)) Refresh();
+        break;
+    case 4:
+        ShellCtxMenu::RecycleToBin(hwnd, path);
+        Refresh();
         break;
     }
 }
@@ -1251,6 +1261,14 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
                 RowMenu(hwnd, b, boxes_[b].files[row]);
             else if (row == -2)  // 头栏右键
                 HeaderMenu(hwnd, b);
+        } else {  // 空白区（大容器玻璃背景）→ 桌面背景右键菜单
+            if (!shell_menu_) shell_menu_ = std::make_unique<ShellCtxMenu>();
+            if (shell_menu_->BuildDesktop(hwnd)) {
+                POINT pt;
+                GetCursorPos(&pt);
+                shell_menu_->Show(hwnd, pt.x, pt.y);
+                shell_menu_->Reset();
+            }
         }
         break;
     }
