@@ -2,6 +2,7 @@
 // 宽字符/UTF-8 转换与路径小工具（header-only）
 #include <windows.h>
 #include <cwctype>
+#include <filesystem>
 #include <string>
 #include <string_view>
 
@@ -35,6 +36,20 @@ inline std::wstring LowerExt(const std::wstring& path) {
     std::wstring e = path.substr(dot + 1);
     for (auto& ch : e) ch = static_cast<wchar_t>(std::towlower(ch));
     return e;
+}
+
+// 容器文件显示排序：文件夹优先 → 按扩展名(格式) → 同格式按名称（均忽略大小写）。
+inline bool DisplayFileLess(const std::wstring& a, const std::wstring& b) {
+    std::error_code ec;
+    bool da = std::filesystem::is_directory(std::filesystem::path(a), ec);
+    bool db = std::filesystem::is_directory(std::filesystem::path(b), ec);
+    if (da != db) return da > db;  // 文件夹优先
+    std::wstring na = std::filesystem::path(a).filename().wstring();
+    std::wstring nb = std::filesystem::path(b).filename().wstring();
+    if (da) return _wcsicmp(na.c_str(), nb.c_str()) < 0;  // 文件夹间按名称
+    int ce = _wcsicmp(LowerExt(na).c_str(), LowerExt(nb).c_str());
+    if (ce != 0) return ce < 0;                            // 按格式(扩展名)
+    return _wcsicmp(na.c_str(), nb.c_str()) < 0;           // 同格式按名称
 }
 
 }  // namespace lb

@@ -158,6 +158,7 @@ void DesktopGrid::Relayout() {
     }
     bbox_ = {minx, miny, maxx, maxy};
     for (auto& b : boxes_) {
+        if (!b.visual) continue;  // 空视觉安全跳过（防删除后越界残留）
         b.visual->SetOffsetX((b.rect.left - minx) * dpi_);
         b.visual->SetOffsetY((b.rect.top - miny) * dpi_);
     }
@@ -248,6 +249,19 @@ void DesktopGrid::RemoveBox(int i) {
     }
     if (root_ && boxes_[i].visual) root_->RemoveVisual(boxes_[i].visual.Get());
     boxes_.erase(boxes_.begin() + i);  // 目录与文件保留（删盒不清文件）
+    // 夹紧所有指向盒子的下标态：被删盒 → -1；其后盒 → 下标前移，避免越界重绘/悬停
+    auto fix = [&](int& v) {
+        if (v == i) v = -1;
+        else if (v > i) --v;
+    };
+    fix(hovered_);
+    fix(drag_box_);
+    fix(box_drag_);
+    fix(drag_index0_);
+    fix(rename_box_);
+    fix(collapse_pending_);
+    fix(scrollbar_box_);
+    fix(task_edit_box_);
     Relayout();
     if (on_boxes_changed_) on_boxes_changed_();
 }
@@ -259,6 +273,7 @@ std::wstring DesktopGrid::DisplayName(const Box& b) const {
 
 
 void DesktopGrid::RedrawBox(int i) {
+    if (i < 0 || i >= (int)boxes_.size() || !boxes_[i].visual || !gfx_) return;  // 越界/空视觉安全退出
     Box& b = boxes_[i];
     ClampScroll(b);
     bool active = b.hovered || static_cast<int>(i) == drag_box_;
@@ -503,9 +518,7 @@ void DesktopGrid::Refresh() {
             continue;
         }
         b.files = org_->FilesInFolder(b.folder);
-        std::sort(b.files.begin(), b.files.end(), [](const std::wstring& a, const std::wstring& c) {
-            return _wcsicmp(fs::path(a).filename().c_str(), fs::path(c).filename().c_str()) < 0;
-        });
+        std::sort(b.files.begin(), b.files.end(), DisplayFileLess);
         ClampScroll(b);
     }
     Relayout();

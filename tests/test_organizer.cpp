@@ -3,6 +3,7 @@
 #include <fstream>
 #include <windows.h>
 #include "core/organizer.hpp"
+#include "core/strutil.hpp"
 
 using namespace lb;
 namespace fs = std::filesystem;
@@ -237,5 +238,47 @@ TEST_CASE("MovePath: 目录跨卷递归复制+删除源", "[organizer]") {
     REQUIRE_FALSE(fs::exists(srcRoot));  // 源已删除
 
     fs::remove_all(dst, ec);
+}
+
+TEST_CASE("DisplayFileLess: 文件夹优先→按格式→同格式按名称", "[strutil]") {
+    auto d = fs::temp_directory_path() / L"lumenbox_sort";
+    std::error_code ec;
+    fs::remove_all(d, ec);
+    fs::create_directories(d);
+    fs::create_directories(d / L"Z文件夹", ec);
+    fs::create_directories(d / L"A文件夹", ec);
+    // 文件路径：is_directory 对不存在的路径返回 false（视为文件），仍可按扩展名排序
+    std::wstring zdir = (d / L"Z文件夹").wstring();
+    std::wstring adir = (d / L"A文件夹").wstring();
+    std::wstring apple_txt = (d / L"apple.txt").wstring();
+    std::wstring cherry_txt = (d / L"cherry.txt").wstring();
+    std::wstring alpha_pdf = (d / L"alpha.pdf").wstring();
+    std::wstring banana_pdf = (d / L"banana.pdf").wstring();
+
+    // 文件夹优先于文件
+    REQUIRE(DisplayFileLess(zdir, apple_txt));
+    REQUIRE_FALSE(DisplayFileLess(apple_txt, zdir));
+    // 文件夹之间按名称（不区分大小写）
+    REQUIRE(DisplayFileLess(adir, zdir));
+    REQUIRE_FALSE(DisplayFileLess(zdir, adir));
+    // 文件：按格式(扩展名) → pdf 组在 txt 组之前（p < t）
+    REQUIRE(DisplayFileLess(banana_pdf, apple_txt));
+    REQUIRE_FALSE(DisplayFileLess(apple_txt, banana_pdf));
+    // 同格式按名称
+    REQUIRE(DisplayFileLess(alpha_pdf, banana_pdf));   // alpha < banana
+    REQUIRE(DisplayFileLess(apple_txt, cherry_txt));   // apple < cherry
+    REQUIRE_FALSE(DisplayFileLess(cherry_txt, apple_txt));
+
+    // 整组排序断言
+    std::vector<std::wstring> v = {apple_txt, zdir, banana_pdf, cherry_txt, alpha_pdf, adir};
+    std::sort(v.begin(), v.end(), DisplayFileLess);
+    REQUIRE(v[0] == adir);       // 文件夹 A 先
+    REQUIRE(v[1] == zdir);       // 文件夹 Z 次
+    REQUIRE(v[2] == alpha_pdf); // pdf 组按名称
+    REQUIRE(v[3] == banana_pdf);
+    REQUIRE(v[4] == apple_txt); // txt 组按名称
+    REQUIRE(v[5] == cherry_txt);
+
+    fs::remove_all(d, ec);
 }
 
