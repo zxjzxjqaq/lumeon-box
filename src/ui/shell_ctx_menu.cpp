@@ -1,7 +1,6 @@
 #include "ui/shell_ctx_menu.hpp"
 #include <shellapi.h>
 #include <shobjidl.h>
-#include <exdisp.h>
 #include <cwchar>
 #pragma comment(lib, "shell32")
 #pragma comment(lib, "ole32")
@@ -31,27 +30,21 @@ bool ShellCtxMenu::Build(HWND hwnd, const std::wstring& path) {
 }
 
 bool ShellCtxMenu::BuildDesktop(HWND hwnd) {
-    // 桌面背景菜单：经桌面 shell 视图取 SVGIO_BACKGROUND（与资源管理器右键桌面一致）。
-    // 不能用桌面 IShellFolder::GetUIObjectOf(0)（那会拿到「桌面当文件夹」的菜单）。
+    (void)hwnd;
+    // 真实的桌面背景菜单：SHGetDesktopFolder -> CreateViewObject(IShellView)
+    //    -> GetItemObject(SVGIO_BACKGROUND)。
+    // 已在目标机器上验证：此链能给到含第三方扩展(查看/排序方式/刷新/粘贴/在终端中打开/
+    // BandiView/Git/撤销删除/新建/显示设置/个性化)的完整桌面菜单(18项)。
+    // 注意：IShellWindows->IShellBrowser 链在部分机器上 QI(IShellBrowser) 会 E_NOINTERFACE，
+    // 故不用它；CreateViewObject 生成的是桌面文件夹视图对象，SVGIO_BACKGROUND 仍能取到
+    // 「背景」菜单，且不依赖当前桌面视图状态。
     ComPtr<IContextMenu> cm;
-    ComPtr<IShellWindows> sw;
-    if (SUCCEEDED(CoCreateInstance(CLSID_ShellWindows, nullptr, CLSCTX_ALL,
-                                   IID_PPV_ARGS(&sw))) && sw) {
-        VARIANT vEmpty;
-        VariantInit(&vEmpty);
-        long hd = 0;
-        ComPtr<IDispatch> disp;
-        if (SUCCEEDED(sw->FindWindowSW(&vEmpty, &vEmpty, SWC_DESKTOP, &hd, SWFO_NEEDDISPATCH,
-                                       &disp)) && disp) {
-            ComPtr<IShellBrowser> browser;
-            if (SUCCEEDED(disp->QueryInterface(IID_PPV_ARGS(&browser))) && browser) {
-                ComPtr<IShellView> view;
-                if (SUCCEEDED(browser->QueryActiveShellView(&view)) && view) {
-                    view->GetItemObject(SVGIO_BACKGROUND, IID_PPV_ARGS(&cm));
-                    shell_view_ = view;         // 视图随菜单存活
-                    shell_browser_ = browser;
-                }
-            }
+    ComPtr<IShellFolder> desktop;
+    if (SUCCEEDED(SHGetDesktopFolder(&desktop)) && desktop) {
+        ComPtr<IShellView> view;
+        if (SUCCEEDED(desktop->CreateViewObject(nullptr, IID_PPV_ARGS(&view))) && view) {
+            view->GetItemObject(SVGIO_BACKGROUND, IID_PPV_ARGS(&cm));
+            shell_view_ = view;         // 视图随菜单存活（菜单命令依赖它）
         }
     }
     if (!cm) return false;  // 拿不到背景菜单 → 宿主改用兜底菜单
@@ -120,7 +113,6 @@ void ShellCtxMenu::Reset() {
     cm2_.Reset();
     cm3_.Reset();
     shell_view_.Reset();
-    shell_browser_.Reset();
     is_desktop_ = false;
 }
 

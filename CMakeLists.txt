@@ -34,6 +34,10 @@ add_executable(drag_probe tools/drag_probe.cpp)
 target_link_libraries(drag_probe PRIVATE ole32 shell32)
 target_compile_definitions(drag_probe PRIVATE UNICODE _UNICODE)
 target_compile_options(drag_probe PRIVATE /utf-8)
+add_executable(deskmenu_probe tools/deskmenu_probe.cpp)
+target_link_libraries(deskmenu_probe PRIVATE shell32 ole32 oleaut32)
+target_compile_definitions(deskmenu_probe PRIVATE UNICODE _UNICODE)
+target_compile_options(deskmenu_probe PRIVATE /utf-8)
 add_test(NAME core COMMAND core_tests)
 
 add_executable(lumenbox WIN32
