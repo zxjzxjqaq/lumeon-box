@@ -12,6 +12,7 @@
 #include "core/stage_log.hpp"
 #include "core/strutil.hpp"
 #include "core/watcher.hpp"
+#include "resource.h"
 #include "shell/desktop_icons.hpp"
 #include "shell/desktop_layer.hpp"
 #include "ui/desktop_grid.hpp"
@@ -259,7 +260,7 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
     dropTarget.SetWindow(win.hwnd());
     if (FAILED(RegisterDragDrop(win.hwnd(), &dropTarget))) StageTrace("drag-reg-FAILED");
 
-    if (!tray.Add(win.hwnd(), WM_APP + 1, LoadIconW(nullptr, IDI_APPLICATION),
+    if (!tray.Add(win.hwnd(), WM_APP + 1, LoadIconW(hInst, MAKEINTRESOURCEW(IDI_APP)),
                   L"LumenBox 桌面整理"))
         StageTrace("tray-add-FAILED");
     // §5.1 P0：热键冲突一次性提示（托盘气泡，不阻塞主流程）

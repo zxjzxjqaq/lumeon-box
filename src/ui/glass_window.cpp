@@ -1,6 +1,7 @@
 #include "ui/glass_window.hpp"
 #include "core/config.hpp"
 #include "core/stage_log.hpp"
+#include "resource.h"
 #include <dwmapi.h>
 #include <windowsx.h>
 #pragma comment(lib, "dwmapi")
@@ -35,6 +36,10 @@ bool GlassWindow::Create(HINSTANCE hInst, const std::wstring& title,
     wc.lpfnWndProc = &GlassWindow::WndProc;
     wc.style = CS_DBLCLKS;  // 生成 WM_LBUTTONDBLCLK：支持双击打开格子内文件
     wc.hInstance = hInst;
+    wc.hIcon = static_cast<HICON>(LoadImageW(hInst, MAKEINTRESOURCEW(IDI_APP), IMAGE_ICON,
+                                             GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), LR_DEFAULTSIZE));
+    wc.hIconSm = static_cast<HICON>(LoadImageW(hInst, MAKEINTRESOURCEW(IDI_APP), IMAGE_ICON,
+                                               GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTSIZE));
     wc.lpszClassName = L"LumenBoxGlass";
     RegisterClassExW(&wc);
 
