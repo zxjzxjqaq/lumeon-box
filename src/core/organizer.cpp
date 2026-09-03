@@ -21,6 +21,39 @@ static void NotifyShellMove(const std::wstring& from, const std::wstring& to) {
     SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_PATHW, dto.c_str(), nullptr);
 }
 
+// 递归复制目录树（供跨卷目录移动用）
+static bool CopyTree(const fs::path& from, const fs::path& to) {
+    std::error_code ec;
+    fs::create_directories(to, ec);
+    for (fs::directory_iterator it(from, fs::directory_options::skip_permission_denied, ec), end;
+         !ec && it != end; it.increment(ec)) {
+        const fs::path d2 = to / it->path().filename();
+        if (it->is_directory(ec)) {
+            if (!CopyTree(it->path(), d2)) return false;
+        } else {
+            std::error_code ecf;
+            fs::copy_file(it->path(), d2, fs::copy_options::overwrite_existing, ecf);
+            if (ecf) return false;
+        }
+    }
+    return !ec;
+}
+
+bool MovePath(const std::wstring& src, const std::wstring& dst) {
+    std::error_code ec;
+    if (fs::is_directory(src, ec)) {
+        fs::path s(src), d(dst);
+        if (s.root_path() == d.root_path())
+            return MoveFileExW(src.c_str(), dst.c_str(), MOVEFILE_COPY_ALLOWED) != 0;
+        // 跨卷目录：递归复制 + 删除源（MoveFileEx 跨卷移动目录不支持）
+        if (!CopyTree(s, d)) return false;
+        std::error_code ecr;
+        fs::remove_all(src, ecr);
+        return !ecr;
+    }
+    return MoveFileExW(src.c_str(), dst.c_str(), MOVEFILE_COPY_ALLOWED) != 0;
+}
+
 Organizer::Organizer(std::wstring desktopDir, std::wstring containerDir, const RuleSet& rules,
                      Journal& jr)
     : desktop_(std::move(desktopDir)),
@@ -49,7 +82,7 @@ bool Organizer::MoveOne(const std::wstring& src, Category c) {
     std::error_code ec;
     fs::create_directories(dir, ec);
     std::wstring dst = UniqueTarget(dir + L"\\" + fs::path(src).filename().wstring());
-    if (!MoveFileExW(src.c_str(), dst.c_str(), MOVEFILE_COPY_ALLOWED)) return false;
+    if (!MovePath(src, dst)) return false;
     jr_.LogMove({src, dst});
     NotifyShellMove(src, dst);
     return true;
@@ -73,7 +106,7 @@ Organizer::Summary Organizer::OrganizeAll() {
         std::wstring dir = BoxDir(c);
         fs::create_directories(dir, ec);
         std::wstring target = UniqueTarget(dir + L"\\" + name);
-        if (!MoveFileExW(it->path().c_str(), target.c_str(), MOVEFILE_COPY_ALLOWED)) continue;
+        if (!MovePath(it->path().wstring(), target)) continue;
         pending.push_back({it->path().wstring(), target});
         sum.byCategory[CategoryName(c)]++;
         sum.moved++;
@@ -108,7 +141,7 @@ bool Organizer::MoveBackToDesktop(const std::wstring& path) {
     if (parent.size() <= root.size() + 1) return false;  // LumenBox 根下不放文件
     jr_.BeginBatch();
     std::wstring dst = UniqueTarget((fs::path(desktop_) / p.filename()).wstring());
-    if (!MoveFileExW(p.c_str(), dst.c_str(), MOVEFILE_COPY_ALLOWED)) return false;
+    if (!MovePath(p.wstring(), dst)) return false;
     jr_.LogMove({p.wstring(), dst});
     NotifyShellMove(p.wstring(), dst);
     return true;
@@ -148,7 +181,7 @@ bool Organizer::MoveToFolder(const std::wstring& path, const std::wstring& folde
     if (_wcsicmp(parent.c_str(), dir.c_str()) == 0) return false;  // 已在同盒不产生副本
     fs::create_directories(dir, ec);
     std::wstring dst = UniqueTarget(dir + L"\\" + fs::path(path).filename().wstring());
-    if (!MoveFileExW(path.c_str(), dst.c_str(), MOVEFILE_COPY_ALLOWED)) return false;
+    if (!MovePath(path, dst)) return false;
     jr_.LogMove({path, dst});
     NotifyShellMove(path, dst);
     return true;
@@ -171,7 +204,7 @@ bool Organizer::UndoLast() {
         std::error_code ec;
         // 原位被占 → 放回为唯一名（永不覆盖）
         std::wstring src = fs::exists(it->src, ec) ? UniqueTarget(it->src) : it->src;
-        MoveFileExW(it->dst.c_str(), src.c_str(), MOVEFILE_COPY_ALLOWED);
+        MovePath(it->dst, src);
     }
     return jr_.RemoveLastBatch();
 }

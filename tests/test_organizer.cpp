@@ -205,3 +205,37 @@ TEST_CASE("容器可收纳文件夹：拖入/枚举/放回", "[organizer]") {
     REQUIRE_FALSE(fs::exists(inbox));
 }
 
+// 找出与 temp 所在卷不同的另一个卷根；没有则返回空（测试跳过）
+static fs::path alternate_volume() {
+    fs::path tmp = fs::temp_directory_path();
+    std::wstring tr = tmp.root_path().wstring();
+    wchar_t tmpRoot = tr.empty() ? 0 : tr[0];
+    for (wchar_t d = L'C'; d <= L'Z'; ++d) {
+        if (d == tmpRoot) continue;
+        fs::path root = fs::path(std::wstring(1, d) + L":\\");
+        std::error_code ec;
+        if (fs::is_directory(root, ec)) return root;
+    }
+    return {};
+}
+
+TEST_CASE("MovePath: 目录跨卷递归复制+删除源", "[organizer]") {
+    fs::path other = alternate_volume();
+    if (other.empty()) { SUCCEED("无第二卷，跳过跨卷测试"); return; }
+    fs::path srcRoot = other / L"lumenbox_xvol_src";
+    fs::path dst = fs::temp_directory_path() / L"lumenbox_xvol_dst";
+    std::error_code ec;
+    fs::remove_all(srcRoot, ec);
+    fs::remove_all(dst, ec);
+    if (!fs::create_directories(srcRoot / L"sub", ec)) { SUCCEED("第二卷根不可写，跳过"); return; }
+    { std::ofstream o(srcRoot / L"root.txt"); o << 'r'; }
+    { std::ofstream o(srcRoot / L"sub" / L"nested.txt"); o << 'n'; }
+
+    REQUIRE(MovePath(srcRoot.wstring(), dst.wstring()));
+    REQUIRE(fs::exists(dst / L"root.txt"));
+    REQUIRE(fs::exists(dst / L"sub" / L"nested.txt"));
+    REQUIRE_FALSE(fs::exists(srcRoot));  // 源已删除
+
+    fs::remove_all(dst, ec);
+}
+

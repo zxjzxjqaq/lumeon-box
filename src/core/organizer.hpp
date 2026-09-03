@@ -7,6 +7,10 @@
 
 namespace lb {
 
+// 跨卷安全移动：文件用 MoveFileEx(MOVEFILE_COPY_ALLOWED)；目录同卷改名，异卷递归复制+删除源。
+// 说明：MoveFileEx 的 MOVEFILE_COPY_ALLOWED 只对「文件」支持跨卷 copy+delete，对「目录」跨卷会失败。
+bool MovePath(const std::wstring& src, const std::wstring& dst);
+
 // 整理执行器：桌面文件 → <容器根>\<分类名>\（容器根默认 %APPDATA%\LumenBox）
 // 只移动文件不移动目录；.lnk/隐藏/系统/~$ 临时文件跳过；永不覆盖（冲突加 (2)）。
 class Organizer {
