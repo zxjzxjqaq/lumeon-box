@@ -31,7 +31,7 @@ class Watcher {
 public:
     ~Watcher() { Stop(); }
 
-    bool Start(const std::wstring& dir, HWND notify, UINT msg);
+    bool Start(const std::wstring& dir, HWND notify, UINT msg, bool recursive = false);
     void Stop();
 
 private:
@@ -41,6 +41,7 @@ private:
     std::wstring dir_;
     HWND notify_ = nullptr;
     UINT msg_ = 0;
+    bool recursive_ = false;
     HANDLE dir_handle_ = INVALID_HANDLE_VALUE;   // 主线程打开，Stop 关闭（解除阻塞读）
     std::thread th_;
     std::atomic<bool> running_{false};

@@ -56,6 +56,8 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
     Autostart autostart;
     HintToast hint;
     Watcher watcher;
+    Watcher boxWatcher;                        // 监视容器根（递归）→ 外部改动/还原时刷新容器
+    int boxWatcherMsg = 0;                     // 0=未启动
     std::vector<std::wstring> pendingBatch;   // watcher 批次的累积（UI 线程防抖）
     bool watcherStarted = false;              // watcher 线程是否已运行
     bool visible = true;
@@ -225,6 +227,12 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
     grid.Refresh();
     StageTrace("2:grid-ready");
 
+    // 容器目录实时监视：外部改动 / 回收站还原时刷新对应容器（还原把文件放回容器目录）
+    boxWatcherMsg = WM_APP + 5;
+    if (boxWatcher.Start(appData, win.hwnd(), boxWatcherMsg, /*recursive*/ true)) {
+        StageTrace("2:box-watch-on");
+    }
+
     // 拖拽归位：资源管理器拖文件到盒子 → 进该盒文件夹；非卡片区 → 放回桌面
     DropTarget dropTarget;
     dropTarget.SetHooks(
@@ -261,6 +269,26 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
     win.OnApp([&](UINT msg, WPARAM wp, LPARAM lp) -> LRESULT {
         if (msg == WM_APP + 3) {  // 双击桌面空白 → 切换图标显隐（钩子路径）
             ToggleDesktopIcons();
+            return 0;
+        }
+        if (msg == WM_APP + 5) {  // 容器目录内容变化（外部增删/回收站还原）→ 刷新受影响容器
+            auto* batch = reinterpret_cast<std::vector<std::wstring>*>(lp);
+            if (batch) {
+                bool hit = false;
+                for (auto& p : *batch) {
+                    for (int i = 0; i < grid.BoxCount(); ++i) {
+                        if (grid.IsTasksAt(i)) continue;
+                        std::wstring pref = org.FolderDir(grid.FolderAt(i)) + L"\\";
+                        if (_wcsnicmp(p.c_str(), pref.c_str(), pref.size()) == 0) {
+                            hit = true;
+                            break;
+                        }
+                    }
+                    if (hit) break;
+                }
+                delete batch;
+                if (hit) grid.Refresh();
+            }
             return 0;
         }
         if (msg == WM_APP + 2) {  // watcher 批次：UI 线程累积，防抖后处理
@@ -338,6 +366,7 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
     }
     StageTrace("6:loop-exited");
     watcher.Stop();
+    boxWatcher.Stop();
     RemoveHideHook();
     RevokeDragDrop(win.hwnd());
     store.save(cfg);

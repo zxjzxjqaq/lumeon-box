@@ -1,7 +1,6 @@
 #include "ui/shell_ctx_menu.hpp"
 #include <shellapi.h>
 #include <shobjidl.h>
-#include <exdisp.h>
 #include <cwchar>
 #pragma comment(lib, "shell32")
 #pragma comment(lib, "ole32")
@@ -32,31 +31,11 @@ bool ShellCtxMenu::Build(HWND hwnd, const std::wstring& path) {
 
 bool ShellCtxMenu::BuildDesktop(HWND hwnd) {
     ComPtr<IContextMenu> cm;
-    // 优先：经桌面 shell 视图的 SVGIO_BACKGROUND 取背景菜单（与资源管理器右键完全一致）
-    ComPtr<IShellWindows> shellWin;
-    if (SUCCEEDED(CoCreateInstance(CLSID_ShellWindows, nullptr, CLSCTX_ALL,
-                                   IID_PPV_ARGS(&shellWin))) && shellWin) {
-        VARIANT vEmpty;
-        VariantInit(&vEmpty);
-        long lhwnd = 0;
-        ComPtr<IDispatch> disp;
-        if (SUCCEEDED(shellWin->FindWindowSW(&vEmpty, &vEmpty, SWC_DESKTOP, &lhwnd,
-                                             SWFO_NEEDDISPATCH, &disp)) && disp) {
-            ComPtr<IShellBrowser> browser;
-            if (SUCCEEDED(disp.As(&browser)) && browser) {
-                ComPtr<IShellView> view;
-                if (SUCCEEDED(browser->QueryActiveShellView(&view)) && view)
-                    view->GetItemObject(SVGIO_BACKGROUND, IID_PPV_ARGS(&cm));
-            }
-        }
-    }
-    // 回退：桌面 IShellFolder 背景 IContextMenu
-    if (!cm) {
-        ComPtr<IShellFolder> desktop;
-        if (SUCCEEDED(SHGetDesktopFolder(&desktop)) && desktop)
-            desktop->GetUIObjectOf(hwnd, 0, nullptr, IID_IContextMenu, nullptr,
-                                   reinterpret_cast<void**>(cm.GetAddressOf()));
-    }
+    // 桌面背景菜单：桌面 IShellFolder 的 IContextMenu（0 项 = 背景）
+    ComPtr<IShellFolder> desktop;
+    if (SUCCEEDED(SHGetDesktopFolder(&desktop)) && desktop)
+        desktop->GetUIObjectOf(hwnd, 0, nullptr, IID_IContextMenu, nullptr,
+                               reinterpret_cast<void**>(cm.GetAddressOf()));
     if (!cm) return false;
     cm.As(&cm2_);
     cm.As(&cm3_);

@@ -45,11 +45,12 @@ std::vector<FileLanding> SuggestLandings(const std::vector<std::wstring>& paths,
     return out;
 }
 
-bool Watcher::Start(const std::wstring& dir, HWND notify, UINT msg) {
+bool Watcher::Start(const std::wstring& dir, HWND notify, UINT msg, bool recursive) {
     if (running_) return false;
     dir_ = dir;
     notify_ = notify;
     msg_ = msg;
+    recursive_ = recursive;
     // 打开目录侦听句柄（主线程），Stop 时关闭以解除阻塞读；worker 用其本地副本
     dir_handle_ = CreateFileW(dir.c_str(), FILE_LIST_DIRECTORY,
                               FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
@@ -85,7 +86,7 @@ void Watcher::ThreadMain() {
     char buf[64 * 1024];
     while (running_) {
         DWORD bytes = 0;
-        if (!ReadDirectoryChangesW(dir, buf, sizeof buf, FALSE, flags, &bytes,
+        if (!ReadDirectoryChangesW(dir, buf, sizeof buf, recursive_ ? TRUE : FALSE, flags, &bytes,
                                    nullptr, nullptr)) {
             if (GetLastError() == ERROR_OPERATION_ABORTED || !running_) break;
             break;  // 其它错误：结束监听（静默降级）
