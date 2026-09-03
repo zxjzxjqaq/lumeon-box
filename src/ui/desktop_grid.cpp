@@ -654,6 +654,29 @@ void DesktopGrid::SetDragBox(int i) {
     if (i >= 0) RedrawBox(i);
 }
 
+// 拖动换位判定：被拖盒移动矩形与其它盒重叠面积最大者（含高低盒都可用，避免中心点
+// 落到矮盒之外导致「有文件→没文件」无法换位）。要求水平覆盖 ≥ 半宽，防止擦边误触。
+int DesktopGrid::DropTargetBox() const {
+    int bd = box_drag_;
+    if (bd < 0 || bd >= (int)boxes_.size()) return -1;
+    float left = box_rect0_.left + drag_delta_.x / dpi_;
+    float top = box_rect0_.top + drag_delta_.y / dpi_;
+    const float w = kBoxW, h = HeightOf(boxes_[bd]);
+    int best = -1;
+    float bestArea = 0.f;
+    for (int i = 0; i < (int)boxes_.size(); ++i) {
+        if (i == bd) continue;
+        const auto& r = boxes_[i].rect;
+        float ox = std::min(left + w, r.right) - std::max(left, r.left);
+        float oy = std::min(top + h, r.bottom) - std::max(top, r.top);
+        if (ox <= 0.f || oy <= 0.f) continue;
+        if (ox < w * 0.5f) continue;  // 水平覆盖不足半宽 → 擦边不换位
+        float area = ox * oy;
+        if (area > bestArea) { bestArea = area; best = i; }
+    }
+    return best;
+}
+
 int DesktopGrid::RowIndexAt(const Box& b, float x, float y) const {
     float relY = y - b.rect.top - kHeaderH;
     if (relY < 0) return -2;  // 头栏
@@ -1000,10 +1023,8 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
                 b.visual->SetOffsetX((b.rect.left - bbox_.left + ddx) * dpi_);
                 b.visual->SetOffsetY((b.rect.top - bbox_.top + ddy) * dpi_);
                 gfx_->device->Commit();
-                // 实时高亮交换目标（拖动盒中心落点盒）
-                float cx = box_rect0_.left + ddx + kBoxW / 2;
-                float cy = box_rect0_.top + ddy + HeightOf(b) / 2;
-                SetDragBox(BoxAtGrid(cx, cy));
+                // 实时高亮交换目标（被拖盒与目标盒重叠最大者）
+                SetDragBox(DropTargetBox());
             } else {  // 整窗
                 SetWindowPos(hwnd_, nullptr, drag_rect0_.left + dx, drag_rect0_.top + dy, 0, 0,
                              SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
@@ -1157,11 +1178,9 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
                 }
                 break;
             }
-            // 换位：松手光标位置（拖动盒中心）落点盒；没落到盒子则保持原位（归位）
+            // 换位：被拖盒与目标盒重叠最大者；没落到盒子则保持原位（归位）
             SetDragBox(-1);  // 清除拖动中的目标高亮
-            float cx = box_rect0_.left + drag_delta_.x / dpi_ + kBoxW / 2;
-            float cy = box_rect0_.top + drag_delta_.y / dpi_ + HeightOf(boxes_[bd]) / 2;
-            int target = BoxAtGrid(cx, cy);
+            int target = DropTargetBox();
             if (bd < 0 || bd >= (int)boxes_.size()) break;  // 越界保护
             if (target >= 0 && target != bd) {
                 std::swap(boxes_[target], boxes_[bd]);  // 交换两盒（含视觉）
