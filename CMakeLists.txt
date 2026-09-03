@@ -55,6 +55,7 @@ add_executable(lumenbox WIN32
   src/ui/hint.cpp
   src/ui/input_box.cpp
   src/ui/calendar.cpp
+  src/ui/shell_ctx_menu.cpp
   src/ui/rules_dialog.cpp
   src/ui/spotlight.cpp
   src/ui/tray.cpp

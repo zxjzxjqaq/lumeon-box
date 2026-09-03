@@ -2,6 +2,7 @@
 #include <dwrite.h>
 #include <functional>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 #include "ui/d2d_interop.hpp"
@@ -9,14 +10,16 @@
 #include "ui/calendar.hpp"
 #include "core/config.hpp"
 #include "core/organizer.hpp"
+#include "ui/shell_ctx_menu.hpp"
 
 namespace lb {
 
-// 桌面格子层：7 个分类玻璃卡，每格独立 DComp 视觉。
-// 布局恒为整齐的 2×4 槽位网格（8 槽 7 格 + 1 空槽）；拖卡片到另一格 = 互换槽位，
-// 拖到空槽 = 移动，拖出网格 = 归位；空隙拖动整窗；顺序与折叠态持久化。
+// 桌面格子层：容器玻璃卡，每格独立 DComp 视觉。
+// 布局：从左到右排、满 4 个换行、不满的末行右对齐；拖卡片到另一格 = 互换位置，
+// 拖出网格 = 归位；空隙拖动整窗；顺序与折叠态持久化。
 class DesktopGrid {
 public:
+    ~DesktopGrid();  // 在 cpp 中定义（需要 ShellCtxMenu 完整类型）
     static constexpr int kMaxBoxes = 24;  // 容器上限
     static constexpr int kPerRow = 4;
     static constexpr float kBoxW = 200.f, kGap = 14.f;
@@ -66,6 +69,8 @@ public:
     std::wstring NameAt(int i) const { return boxes_[i].name; }
     void BeginRename(int i) { if (i >= 0 && i < (int)boxes_.size()) StartRename(i); }
     void SetDragBox(int i);            // 拖拽悬停高亮（-1 清除）
+    // 外壳菜单在弹出期间由玻璃窗转发 WM_INITMENUPOPUP/DRAWITEM/MEASUREITEM/MENUCHAR
+    LRESULT OnShellMenuMsg(UINT msg, WPARAM wp, LPARAM lp);
 
 private:
     struct Box {
@@ -180,6 +185,7 @@ private:
     std::function<void(bool)> on_moved_;
     std::function<void()> on_boxes_changed_;
     std::function<void(int)> on_clear_box_;
+    std::unique_ptr<ShellCtxMenu> shell_menu_;   // 文件外壳上下文菜单（右键时构建）
 };
 
 }  // namespace lb

@@ -132,6 +132,12 @@ LRESULT GlassWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_TIMER:
         if (self && self->on_timer_) self->on_timer_(hwnd, static_cast<UINT>(wp));
         return 0;
+    case WM_INITMENUPOPUP:
+    case WM_DRAWITEM:
+    case WM_MEASUREITEM:
+    case WM_MENUCHAR:
+        if (self && self->on_menu_) return self->on_menu_(msg, wp, lp);
+        break;
     case WM_DESTROY:
         if (self) self->SaveBounds();
         PostQuitMessage(0);

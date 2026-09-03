@@ -30,6 +30,8 @@ public:
     void OnWheel(std::function<void(int delta, float x, float y)> cb) { on_wheel_ = std::move(cb); }
     // WM_APP 区段消息透传（托盘回调等），返回值作为 WndProc 结果
     void OnApp(std::function<LRESULT(UINT msg, WPARAM wp, LPARAM lp)> cb) { on_app_ = std::move(cb); }
+    // 外壳上下文菜单消息转发（WM_INITMENUPOPUP/WM_DRAWITEM/WM_MEASUREITEM/WM_MENUCHAR）
+    void OnMenu(std::function<LRESULT(UINT msg, WPARAM wp, LPARAM lp)> cb) { on_menu_ = std::move(cb); }
     // 键盘输入（WM_CHAR/WM_KEYDOWN/WM_KILLFOCUS）→ 就地重命名等；返回 true 表示已处理
     void OnKeyboard(std::function<bool(UINT msg, UINT wp)> cb) { on_keyboard_ = std::move(cb); }
     // WM_NCHITTEST 委托：返回 HTTRANSPARENT 穿透 / HTCLIENT 交互（贴桌模式必须穿透空白区）
@@ -47,6 +49,7 @@ private:
     std::function<void(UINT, float, float)> on_mouse_;
     std::function<void(int, float, float)> on_wheel_;
     std::function<LRESULT(UINT, WPARAM, LPARAM)> on_app_;
+    std::function<LRESULT(UINT, WPARAM, LPARAM)> on_menu_;
     std::function<bool(UINT, UINT)> on_keyboard_;
     std::function<int(float, float)> on_hittest_;
     float dpi_ = 96.f;

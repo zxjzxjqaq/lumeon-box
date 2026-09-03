@@ -2,6 +2,7 @@
 #include "ui/file_drag.hpp"
 #include "ui/input_box.hpp"
 #include "ui/calendar.hpp"
+#include "ui/shell_ctx_menu.hpp"
 #include <algorithm>
 #include <fstream>
 #include <wchar.h>
@@ -58,6 +59,8 @@ static std::wstring DateLabel(ADate d) {
     swprintf_s(b, L"%d月%d日 周%s", d.m, d.d, WD[wd]);
     return b;
 }
+
+DesktopGrid::~DesktopGrid() = default;
 
 bool DesktopGrid::Init(GraphicsContext& gfx, ComPtr<IDCompositionVisual> root, float dpi) {
     gfx_ = &gfx;
@@ -699,6 +702,18 @@ void DesktopGrid::OpenFile(const std::wstring& path) const {
 
 void DesktopGrid::RowMenu(HWND hwnd, int boxIdx, const std::wstring& path) {
     (void)boxIdx;
+    if (!shell_menu_) shell_menu_ = std::make_unique<ShellCtxMenu>();
+    if (shell_menu_->Build(hwnd, path)) {
+        POINT pt;
+        GetCursorPos(&pt);
+        int custom = shell_menu_->Show(hwnd, pt.x, pt.y);
+        if (custom == (int)ShellCtxMenu::kCustomBackToDesktop) {
+            if (org_ && org_->MoveBackToDesktop(path)) Refresh();
+        }
+        shell_menu_->Reset();
+        return;
+    }
+    // 外壳菜单不可用（如文件已不存在）→ 回退简单菜单
     HMENU m = CreatePopupMenu();
     AppendMenuW(m, MF_STRING, 1, L"打开");
     AppendMenuW(m, MF_STRING, 2, L"打开位置");
@@ -720,6 +735,11 @@ void DesktopGrid::RowMenu(HWND hwnd, int boxIdx, const std::wstring& path) {
         if (org_ && org_->MoveBackToDesktop(path)) Refresh();
         break;
     }
+}
+
+LRESULT DesktopGrid::OnShellMenuMsg(UINT msg, WPARAM wp, LPARAM lp) {
+    if (shell_menu_) return shell_menu_->HandleMsg(msg, wp, lp);
+    return 0;
 }
 
 void DesktopGrid::HeaderMenu(HWND hwnd, int boxIdx) {
