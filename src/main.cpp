@@ -6,6 +6,8 @@
 #include "anim/spring_demo.hpp"  // M0 演示保留编译；主流程不再使用
 #include "core/appindex.hpp"
 #include "core/autostart.hpp"
+#include "core/clipboard_monitor.hpp"
+#include "core/clipboard_store.hpp"
 #include "core/config.hpp"
 #include "core/organizer.hpp"
 #include "core/rules.hpp"
@@ -15,6 +17,7 @@
 #include "resource.h"
 #include "shell/desktop_icons.hpp"
 #include "shell/desktop_layer.hpp"
+#include "ui/clip_panel.hpp"
 #include "ui/desktop_grid.hpp"
 #include "ui/drop_target.hpp"
 #include "ui/glass_window.hpp"
@@ -90,6 +93,32 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
     // 顶层浮窗(independent/bottom)会被显示桌面最小化，故一律默认挂到桌面层(DesktopLayer)。
     DesktopMode mode = DesktopMode::DesktopLayer;
 
+    // M5：剪贴板历史（设计文档 D7–D9）。store 先 Load，面板/监听共享同一份。
+    ClipStore clipStore(appData + L"\\clipboard");
+    clipStore.Load();
+    ClipboardMonitor clipMon;
+    ClipPanel clipPanel;
+    clipPanel.SetStore(&clipStore);
+    clipPanel.SetCopyFn([&](const ClipEntry& e) {
+        return CopyClipToClipboard(
+            win.hwnd(), e,
+            [&](const std::string& fmt, std::string& bytes) {
+                return clipStore.LoadPayload(e, fmt, bytes);
+            },
+            [&](std::vector<std::wstring>& out) {  // 多图条目：全部 png blob 路径
+                for (auto& p : e.payloads)
+                    if (p.fmt == "png" && !p.file.empty())
+                        out.push_back(clipStore.BlobPath(e, p));
+            });
+    });
+    clipPanel.SetPausedApi(
+        [&] { return cfg.clipboardPaused; },
+        [&](bool p) {
+            cfg.clipboardPaused = p;
+            clipMon.SetPaused(p);
+            store.save(cfg);
+        });
+
     auto toggleVisible = [&] {
         visible = !visible;
         ShowWindow(win.hwnd(), visible ? SW_SHOW : SW_HIDE);
@@ -117,6 +146,9 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
         } else if (id == 4) {  // Ctrl+Space：快速搜索
             StageTrace("k:ca4-spotlight");
             spot.Toggle();
+        } else if (id == 5) {  // Ctrl+B：剪贴板历史面板
+            StageTrace("k:cb-clip");
+            clipPanel.Toggle();
         }
     };
 
@@ -128,6 +160,26 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
     if (!RegisterHotKey(win.hwnd(), 4, MOD_CONTROL | MOD_NOREPEAT, VK_SPACE)) {
         StageTrace("hotkey-ctrl-space-FAILED");
         ctrlSpaceFailed = true;
+    }
+    // M5：剪贴板历史监听（须在主线程 Start：message 窗口挂主循环）+ Ctrl+B 热键（D7）
+    bool clipHotkeyFailed = false;
+    if (cfg.clipboardEnabled) {
+        ClipboardOpts clipOpts;
+        clipOpts.maxEntries = cfg.clipboardMaxEntries;
+        clipOpts.blobMaxMB = static_cast<uint64_t>(cfg.clipboardBlobMB);
+        clipOpts.recordSource = cfg.clipboardRecordSource;
+        if (clipMon.Start(&clipStore, win.hwnd(), WM_APP + 6, clipOpts))
+            clipMon.SetPaused(cfg.clipboardPaused);
+        else
+            StageTrace("clipmon-start-FAILED");
+        if (!RegisterHotKey(win.hwnd(), 5, MOD_CONTROL | MOD_NOREPEAT, 'B')) {
+            if (RegisterHotKey(win.hwnd(), 5, MOD_CONTROL | MOD_ALT, 'B'))
+                StageTrace("hotkey-ctrl-b-FAILED-fallback-ctrl-alt-b");
+            else {
+                StageTrace("hotkey-clip-register-FAILED");
+                clipHotkeyFailed = true;
+            }
+        }
     }
     // 双击隐藏图标：默认钩子（D6），失败或热键模式走 Ctrl+Alt+H
     if (cfg.hideIconsMode == "hook") {
@@ -267,8 +319,18 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
     // §5.1 P0：热键冲突一次性提示（托盘气泡，不阻塞主流程）
     if (ctrlSpaceFailed)
         tray.Balloon(L"热键冲突", L"Ctrl+Space 被占用，快速搜索暂不可用（可在设置后重试）。");
+    if (clipHotkeyFailed)
+        tray.Balloon(L"热键冲突", L"Ctrl+B 被占用，剪贴板历史热键暂不可用（托盘菜单仍可打开）。");
 
     win.OnApp([&](UINT msg, WPARAM wp, LPARAM lp) -> LRESULT {
+        if (msg == WM_APP + 6) {  // 剪贴板新条目落库 → 面板打开时实时刷新
+            clipPanel.OnStoreChanged();
+            return 0;
+        }
+        if (msg == WM_APP + 7) {  // 图片超限被拒（一次性气泡，不阻塞）
+            tray.Balloon(L"剪贴板历史", L"有图片过大未被记录（超过 8K 像素或 32MB 限制）。");
+            return 0;
+        }
         if (msg == WM_APP + 3) {  // 双击桌面空白 → 切换图标显隐（钩子路径）
             ToggleDesktopIcons();
             return 0;
@@ -308,6 +370,10 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
                 SetForegroundWindow(win.hwnd());
                 HMENU m = CreatePopupMenu();
                 AppendMenuW(m, MF_STRING, 7, L"快速搜索  (Ctrl+Space)");
+                AppendMenuW(m, MF_STRING, 10, L"剪贴板历史  (Ctrl+B)");
+                AppendMenuW(m, MF_STRING | (cfg.clipboardPaused ? MF_CHECKED : 0u), 11,
+                            L"暂停记录剪贴板");
+                AppendMenuW(m, MF_STRING, 12, L"清空剪贴板历史");
                 AppendMenuW(m, MF_STRING, 8, L"新建容器…");
                 AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
                 AppendMenuW(m, MF_STRING | (autostart.IsEnabled() ? MF_CHECKED : 0u), 4,
@@ -326,6 +392,18 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
                     autostart.IsEnabled() ? autostart.Disable() : autostart.Enable();
                     break;
                 case 7: spot.Toggle(); break;
+                case 10: clipPanel.Toggle(); break;
+                case 11: {  // 暂停/恢复剪贴板记录（同步持久化）
+                    bool p = !cfg.clipboardPaused;
+                    cfg.clipboardPaused = p;
+                    clipMon.SetPaused(p);
+                    store.save(cfg);
+                    break;
+                }
+                case 12:  // 一键清空（置顶保留），面板打开则同步刷新
+                    clipStore.Clear();
+                    clipPanel.OnStoreChanged();
+                    break;
                 case 8: {  // 新建容器：加盒并立即就地重命名
                     int bi = grid.AddBox(L"\u65B0\u5BB9\u5668");  // 新容器
                     if (bi >= 0) grid.BeginRename(bi);
@@ -367,6 +445,7 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
         }
     }
     StageTrace("6:loop-exited");
+    clipMon.Stop();  // 剪贴板监听：先停线程再销毁监听窗（须主线程）
     watcher.Stop();
     boxWatcher.Stop();
     RemoveHideHook();
