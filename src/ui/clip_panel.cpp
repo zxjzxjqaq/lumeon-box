@@ -23,8 +23,10 @@ const gd::Color kHoverRow(120, 30, 41, 59);    // #1E293B slate-800 悬停�?
 const gd::Color kThumbBg(255, 11, 17, 32);     // #0B1120 缩略图衬�?
 const gd::Color kLine(255, 41, 53, 72);        // #293548 分隔�?按钮描边
 const gd::Color kPin(255, 245, 158, 11);       // #F59E0B amber 置顶标记
-const gd::Color kDanger(255, 239, 68, 68);     // #EF4444 破坏性操�?
+const gd::Color kDanger(255, 239, 68, 68);     // #EF4444 破坏性操作
 const gd::Color kPaused(255, 245, 158, 11);    // 暂停态琥珀
+const gd::Color kPreviewBg(250, 15, 23, 42);   // 悬停预览窗底（slate-900 近不透明）
+const gd::Color kToastBg(250, 15, 23, 42);     // Toast 底
 }  // namespace
 
 namespace lb {
@@ -433,9 +435,9 @@ path.AddArc(w - r - 0.5f, 0.5f, r, r, 270, 90);
 path.AddArc(w - r - 0.5f, h - r - 0.5f, r, r, 0, 90);
 path.AddArc(0.5f, h - r - 0.5f, r, r, 90, 90);
 path.CloseFigure();
-gd::SolidBrush bg(gd::Color(235, 11, 14, 20));
+gd::SolidBrush bg(kPanelBg);
 g.FillPath(&bg, &path);
-gd::Pen stroke(gd::Color(70, 34, 211, 238), 1.f);
+gd::Pen stroke(kPanelStroke, 1.f);
 g.DrawPath(&stroke, &path);
 
         // ---- 头部：过�?Tab ----
@@ -444,11 +446,18 @@ gd::Font fTab(L"Microsoft YaHei UI", 11.f, gd::FontStyleRegular, gd::UnitPixel);
 for (int i = 0; i < 4; ++i) {
 gd::RectF rc((gd::REAL)(12 + i * 58), 10.f, 54.f, 24.f);
 if (i == filter_) {
-gd::SolidBrush act(gd::Color(64, 34, 211, 238));
-g.FillRectangle(&act, rc);
+    gd::GraphicsPath cap;
+    float cr = 12.f;
+    cap.AddArc(rc.X, rc.Y, cr, cr, 180, 90);
+    cap.AddArc(rc.X + rc.Width - cr, rc.Y, cr, cr, 270, 90);
+    cap.AddArc(rc.X + rc.Width - cr, rc.Y + rc.Height - cr, cr, cr, 0, 90);
+    cap.AddArc(rc.X, rc.Y + rc.Height - cr, cr, cr, 90, 90);
+    cap.CloseFigure();
+    gd::SolidBrush act(kSelRow);
+    g.FillPath(&act, &cap);
 }
-gd::SolidBrush tc(i == filter_ ? gd::Color(255, 255, 255)
-: gd::Color(160, 170, 182));
+gd::SolidBrush tc(i == filter_ ? kAccentText
+: kTextMeta);
 gd::StringFormat sf;
 sf.SetAlignment(gd::StringAlignmentCenter);
 sf.SetLineAlignment(gd::StringAlignmentCenter);
@@ -462,9 +471,9 @@ sf.SetLineAlignment(gd::StringAlignmentCenter);
 bool paused = pausedGet_ ? pausedGet_() : false;
 {
 gd::RectF rc((gd::REAL)(kW - 170), 12.f, 62.f, 22.f);
-gd::Pen bp(gd::Color(60, 255, 255, 255), 1.f);
+gd::Pen bp(kLine, 1.f);
 g.DrawRectangle(&bp, rc);
-gd::SolidBrush tc(paused ? gd::Color(255, 196, 122) : gd::Color(200, 210, 220));
+gd::SolidBrush tc(paused ? kPaused : kTextMeta);
 g.DrawString(paused ? L"已暂停" : L"暂停", -1, &fBtn, rc, &sf, &tc);
 }
 {
@@ -473,13 +482,13 @@ gd::Pen bp(gd::Color(clearArm_ ? 220 : 60, clearArm_ ? 248 : 255,
 clearArm_ ? 113 : 255, clearArm_ ? 113 : 255),
 1.f);
 if (clearArm_) {
-gd::SolidBrush arm(gd::Color(60, 248, 113, 113));
+gd::SolidBrush arm(kDanger);
 g.FillRectangle(&arm, rc);
 }
 g.DrawRectangle(&bp, rc);
-gd::SolidBrush tc(clearArm_ ? gd::Color(255, 255, 255)
-: gd::Color(200, 210, 220));
-g.DrawString(clearArm_ ? L"确认?" : L"清空", -1, &fBtn, rc, &sf, &tc);
+gd::SolidBrush tc(clearArm_ ? kText
+: kTextMeta);
+g.DrawString(clearArm_ ? L"确认？" : L"清空", -1, &fBtn, rc, &sf, &tc);
 }
 {  // �?
 gd::SolidBrush closecol(gd::Color(220, 255, 255, 255));
@@ -488,13 +497,13 @@ g.DrawLine(&closePen, (gd::REAL)(kW - 30), 18.f, (gd::REAL)(kW - 16), 32.f);
 g.DrawLine(&closePen, (gd::REAL)(kW - 30), 32.f, (gd::REAL)(kW - 16), 18.f);
 }
         // 分隔�?
-gd::SolidBrush sep(gd::Color(40, 255, 255, 255));
+gd::SolidBrush sep(kLine);
 g.FillRectangle(&sep, gd::RectF(8.f, (gd::REAL)kHeaderH, (gd::REAL)(w - 16), 1.f));
 
         // ---- 空状�?----
 if (rows_.empty()) {
 gd::Font fEmpty(L"Microsoft YaHei UI", 13.f, gd::FontStyleRegular, gd::UnitPixel);
-gd::SolidBrush tc(gd::Color(150, 160, 170, 180));
+gd::SolidBrush tc(kTextDim);
 gd::StringFormat cf;
 cf.SetAlignment(gd::StringAlignmentCenter);
 gd::RectF rc(0.f, (gd::REAL)(kHeaderH + 20), (gd::REAL)w, 30.f);
@@ -516,12 +525,12 @@ int row = scroll_ + vi;
 const ClipEntry& e = items_[rows_[row]];
 float y = (gd::REAL)(kHeaderH + vi * kRowH);
 if (row == sel_) {
-gd::SolidBrush hl(gd::Color(64, 34, 211, 238));
+gd::SolidBrush hl(kSelRow);
 g.FillRectangle(&hl, gd::RectF(8.f, y + 2.f, (gd::REAL)(w - 16),
 (gd::REAL)kRowH - 4.f));
 }
 if (e.pinned) {  // 置顶：左缘青色条
-gd::SolidBrush pin(gd::Color(200, 34, 211, 238));
+gd::SolidBrush pin(kPin);
 g.FillRectangle(&pin, gd::RectF(8.f, y + 2.f, 3.f, (gd::REAL)kRowH - 4.f));
 }
             // 左：缩略图（图片条目 / 指向图片文件的文件条目）或类型徽�?
@@ -548,7 +557,7 @@ gd::REAL s = std::min((gd::REAL)box / iw, (gd::REAL)box / ih);
 gd::REAL dw = iw * s, dh = ih * s;
 g.DrawImage(th, bx + (box - dw) / 2, by + (box - dh) / 2, dw, dh);
 if (row == sel_) {  // 选中态：青色描边
-gd::Pen tp(gd::Color(180, 34, 211, 238), 1.5f);
+gd::Pen tp(kAccent, 1.5f);
 g.DrawRectangle(&tp, bx, by, (gd::REAL)box, (gd::REAL)box);
 }
 if (e.type == "files" || e.type == "image") {  // 多图角标�?N
@@ -562,7 +571,7 @@ if (p.fmt == "png") ++imgTotal;
 }
 if (imgTotal > 1) {
 std::wstring n = L"+" + std::to_wstring(imgTotal - 1);
-gd::SolidBrush nb(gd::Color(220, 34, 211, 238));
+gd::SolidBrush nb(kAccent);
 gd::RectF nrc(bx + box - 24, by + box - 18, 22.f, 16.f);
 g.FillRectangle(&nb, nrc);
 gd::SolidBrush ntc(gd::Color(255, 12, 15, 23));
@@ -575,19 +584,19 @@ g.DrawString(n.c_str(), -1, &fTab, nrc, &nf2, &ntc);
 }
 } else if (e.type == "image") {
                 // 缩略图缺�?解码失败：占位块 + 图字
-gd::SolidBrush phb(gd::Color(70, 40, 46, 60));
+gd::SolidBrush phb(kThumbBg);
 gd::RectF rc(bx, by, (gd::REAL)box, (gd::REAL)box);
 g.FillRectangle(&phb, rc);
-gd::SolidBrush tc(gd::Color(190, 220, 235));
+gd::SolidBrush tc(kTextMeta);
 gd::StringFormat cf;
 cf.SetAlignment(gd::StringAlignmentCenter);
 cf.SetLineAlignment(gd::StringAlignmentCenter);
 g.DrawString(L"图", -1, &fTab, rc, &cf, &tc);
 } else {
-gd::SolidBrush badge(gd::Color(70, 40, 46, 60));
+gd::SolidBrush badge(kThumbBg);
 gd::RectF rc(bx, by, 36.f, 36.f);
 g.FillRectangle(&badge, rc);
-gd::SolidBrush tc(gd::Color(190, 220, 235));
+gd::SolidBrush tc(kTextMeta);
 gd::StringFormat cf;
 cf.SetAlignment(gd::StringAlignmentCenter);
 cf.SetLineAlignment(gd::StringAlignmentCenter);
@@ -603,7 +612,7 @@ if (!e.source.empty()) meta += L" · " + e.source;
 meta += L" · " + TypeTag(EffType(e)) + L" · " + SizeStr(e);
 if (e.type == "image" && e.imgW > 0)
 meta += L" · " + std::to_wstring(e.imgW) + L"×" + std::to_wstring(e.imgH);
-gd::SolidBrush mcol(gd::Color(150, 160, 170, 180));
+gd::SolidBrush mcol(kTextMeta);
 float metaY = e.type == "image" ? y + 20.f : y + 8.f;
 g.DrawString(meta.c_str(), (INT)meta.size(), &fMeta,
 gd::RectF(tx, metaY, tw, 16.f), &trim, &mcol);
@@ -625,8 +634,8 @@ if (paths.size() > 3) prev += L"…";
 prev = e.text;
 }
 bool noPrev = prev.empty();
-gd::SolidBrush pcol(noPrev ? gd::Color(110, 130, 140)
-: gd::Color(235, 238, 245));
+gd::SolidBrush pcol(noPrev ? kTextDim
+: kText);
 g.DrawString((noPrev ? L"（无预览）" : prev).c_str(),
 (INT)(noPrev ? 5 : prev.size()), &fPrev,
 gd::RectF(tx, y + 26.f, tw, 32.f), &trim, &pcol);  // 两行预览
@@ -637,16 +646,16 @@ gd::RectF rc((gd::REAL)rcIn.left, (gd::REAL)rcIn.top,
 (gd::REAL)(rcIn.right - rcIn.left),
 (gd::REAL)(rcIn.bottom - rcIn.top));
 if (active) {
-gd::SolidBrush fill(gd::Color(90, 34, 211, 238));
+gd::SolidBrush fill(kAccent);
 g.FillRectangle(&fill, rc);
 } else {
-gd::Pen bp(gd::Color(60, 255, 255, 255), 1.f);
+gd::Pen bp(kLine, 1.f);
 g.DrawRectangle(&bp, rc);
 }
 gd::Font fIco(L"Segoe MDL2 Assets", 12.f, gd::FontStyleRegular,
 gd::UnitPixel);
-gd::SolidBrush tc(active ? gd::Color(255, 255, 255)
-: gd::Color(215, 224, 235));
+gd::SolidBrush tc(active ? kText
+: kTextMeta);
 g.DrawString(glyph, -1, &fIco, rc, &sf, &tc);
 };
 drawBtn(PinRect((int)y), L"\uE718", e.pinned);  // 图钉
@@ -662,7 +671,7 @@ float t = rows_.size() > vis
                           ? (float)scroll_ / (float)(rows_.size() - vis)
                           : 0.f;
 float ty = trackY0 + (trackH - thumbH) * t;
-gd::SolidBrush sb(gd::Color((int)(220 * scrollAlpha_), 90, 120, 200));
+gd::SolidBrush sb(gd::Color((int)(220 * scrollAlpha_), 20, 184, 166));
 g.FillRectangle(&sb, gd::RectF((gd::REAL)(w - 4), ty, 2.5f, thumbH));
 }
 }
@@ -903,7 +912,7 @@ path.AddArc(w - r - 0.5f, 0.5f, r, r, 270, 90);
 path.AddArc(w - r - 0.5f, h - r - 0.5f, r, r, 0, 90);
 path.AddArc(0.5f, h - r - 0.5f, r, r, 90, 90);
 path.CloseFigure();
-gd::SolidBrush bg(gd::Color(244, 11, 14, 20));
+gd::SolidBrush bg(kPreviewBg);
 g.FillPath(&bg, &path);
 gd::Pen stroke(gd::Color(90, 34, 211, 238), 1.f);
 g.DrawPath(&stroke, &path);
@@ -1074,7 +1083,7 @@ path.AddArc(w - r - 0.5f, 0.5f, r, r, 270, 90);
 path.AddArc(w - r - 0.5f, h - r - 0.5f, r, r, 0, 90);
 path.AddArc(0.5f, h - r - 0.5f, r, r, 90, 90);
 path.CloseFigure();
-gd::SolidBrush bg(gd::Color(246, 11, 14, 20));
+gd::SolidBrush bg(kToastBg);
 g.FillPath(&bg, &path);
 gd::Pen stroke(gd::Color(110, 34, 211, 238), 1.f);
 g.DrawPath(&stroke, &path);
