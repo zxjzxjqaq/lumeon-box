@@ -67,7 +67,7 @@ private:
     int HitHeader(int x, int y) const;
     int HitRow(int x, int y) const;
 
-    static constexpr int kW = 560, kHeaderH = 44, kRowH = 60;
+    static constexpr int kW = 560, kHeaderH = 48, kRowH = 68;
     float scale_ = 1.f;
     HWND hwnd_ = nullptr;
     bool created_ = false;
@@ -82,6 +82,7 @@ private:
     int sel_ = 0;
     int scroll_ = 0;                 // 首个可见行下标
     bool clearArm_ = false;          // 清空二次确认臂
+    bool closeHot_ = false;          // 关闭按钮悬停态
     int winH_ = 0;                   // 当前逻辑高度
     std::map<std::string, void*> thumbs_;  // id / "f:"+path → Gdiplus::Bitmap*
     mutable std::map<std::string, std::vector<std::wstring>> pathCache_;  // id → HDROP 路径

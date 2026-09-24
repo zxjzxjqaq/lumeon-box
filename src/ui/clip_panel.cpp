@@ -11,22 +11,24 @@ namespace gd = Gdiplus;
 namespace {
 // ---- 设计 token（ui-ux-pro-max：Slate 深色�?+ Teal 强调，扁平无阴影�?---
 // 对比度均 �?4.5:1�?F1F5F9/#0F172A�?6:1�?94A3B8/#0F172A�?.4:1�?2DD4BF/#0F172A�?:1
-const gd::Color kPanelBg(242, 15, 23, 42);     // #0F172A slate-900 面板�?
-const gd::Color kPanelStroke(80, 51, 65, 85);  // #334155 slate-700 细描�?
-const gd::Color kText(255, 241, 245, 249);     // #F1F5F9 slate-100 主文�?
-const gd::Color kTextMeta(200, 148, 163, 184); // #94A3B8 slate-400 元信�?
-const gd::Color kTextDim(200, 100, 116, 139);  // #64748B slate-500 弱提�?
+const gd::Color kPanelBg(255, 15, 23, 42);     // #0F172A slate-900 面板底（须不透明：
+                                               // 分层窗 alpha<255 会让桌面内容透出，实测很脏）
+const gd::Color kPanelStroke(255, 45, 58, 78); // #2D3A4E 面板描边
+const gd::Color kText(255, 241, 245, 249);     // #F1F5F9 slate-100 主文字
+const gd::Color kTextMeta(255, 148, 163, 184); // #94A3B8 slate-400 元信息
+const gd::Color kTextDim(255, 100, 116, 139);  // #64748B slate-500 弱提示
 const gd::Color kAccent(255, 20, 184, 166);    // #14B8A6 teal-500 强调
 const gd::Color kAccentText(255, 45, 212, 191);// #2DD4BF teal-400 强调文字
-const gd::Color kSelRow(46, 20, 184, 166);     // 选中�?teal 淡底
-const gd::Color kHoverRow(120, 30, 41, 59);    // #1E293B slate-800 悬停�?
-const gd::Color kThumbBg(255, 11, 17, 32);     // #0B1120 缩略图衬�?
-const gd::Color kLine(255, 41, 53, 72);        // #293548 分隔�?按钮描边
+const gd::Color kSelRow(255, 24, 51, 60);      // 选中行：teal 调深实底
+const gd::Color kHoverRow(255, 30, 41, 59);    // #1E293B slate-800 悬停底
+const gd::Color kThumbBg(255, 11, 17, 32);     // #0B1120 缩略图衬底
+const gd::Color kLine(255, 41, 53, 72);        // #293548 分隔线/按钮描边
+const gd::Color kRowSep(255, 30, 41, 59);      // 行间细分隔线
 const gd::Color kPin(255, 245, 158, 11);       // #F59E0B amber 置顶标记
 const gd::Color kDanger(255, 239, 68, 68);     // #EF4444 破坏性操作
 const gd::Color kPaused(255, 245, 158, 11);    // 暂停态琥珀
-const gd::Color kPreviewBg(250, 15, 23, 42);   // 悬停预览窗底（slate-900 近不透明）
-const gd::Color kToastBg(250, 15, 23, 42);     // Toast 底
+const gd::Color kPreviewBg(255, 15, 23, 42);   // 悬停预览窗底（不透明，同面板）
+const gd::Color kToastBg(255, 15, 23, 42);     // Toast 底（不透明）
 }  // namespace
 
 namespace lb {
@@ -377,11 +379,15 @@ return x >= r.left && x < r.right && y >= r.top && y < r.bottom;
 
 int ClipPanel::HitHeader(int x, int y) const {
 if (y >= kHeaderH) return 0;
-for (int i = 0; i < 4; ++i)
-if (x >= 12 + i * 58 && x < 12 + i * 58 + 54) return 100 + i;
-if (x >= kW - 170 && x < kW - 108) return 200;  // 暂停/恢复
-if (x >= kW - 104 && x < kW - 42) return 201;   // 清空（二次确认）
-if (x >= kW - 38 && x < kW - 10) return 202;    // 关闭
+// Tab：与绘制同参数（kTabX0=14, kTabW=62, kTabGap=6）
+for (int i = 0; i < 4; ++i) {
+    float x0 = 14.f + i * 68.f;
+    if (x >= x0 && x < x0 + 62.f) return 100 + i;
+}
+// 右侧按钮：关闭 28px（最右）→ 清空 56px → 暂停 56px
+if (x >= kW - 40 && x < kW - 12) return 202;            // 关闭
+if (x >= kW - 104 && x < kW - 48) return 201;           // 清空
+if (x >= kW - 168 && x < kW - 112) return 200;          // 暂停/恢复
 return 0;
 }
 
@@ -421,6 +427,8 @@ HGDIOBJ old = SelectObject(mem, bmp);
 {
 gd::Graphics g(mem);
 g.SetSmoothingMode(gd::SmoothingModeAntiAlias);
+// CJK 必须用 GridFit：它对小字号中文字形做整像素对齐，笔画锐利；
+// 换成纯 AntiAlias 会让 CJK 笔画发虚、相邻笔画粘连成重影（实测）。
 g.SetTextRenderingHint(gd::TextRenderingHintAntiAliasGridFit);
 g.ScaleTransform(scale_, scale_);
 
@@ -440,63 +448,86 @@ g.FillPath(&bg, &path);
 gd::Pen stroke(kPanelStroke, 1.f);
 g.DrawPath(&stroke, &path);
 
-        // ---- 头部：过�?Tab ----
+        // ---- 头部：过滤 Tab（圆角胶囊，间距 8px；高度随 kHeaderH 居中）----
 const wchar_t* tabs[4] = {L"全部", L"文本", L"图片", L"文件"};
-gd::Font fTab(L"Microsoft YaHei UI", 11.f, gd::FontStyleRegular, gd::UnitPixel);
+gd::Font fTab(L"Microsoft YaHei UI", 14.f, gd::FontStyleRegular, gd::UnitPixel);
+constexpr float kTabW = 62.f, kTabGap = 6.f, kTabH = 28.f;
+constexpr float kTabX0 = 14.f;
+float tabY = ((gd::REAL)kHeaderH - kTabH) / 2.f;
+gd::StringFormat tsf;
+tsf.SetAlignment(gd::StringAlignmentCenter);
+tsf.SetLineAlignment(gd::StringAlignmentCenter);
+tsf.SetFormatFlags(gd::StringFormatFlagsNoWrap);
 for (int i = 0; i < 4; ++i) {
-gd::RectF rc((gd::REAL)(12 + i * 58), 10.f, 54.f, 24.f);
-if (i == filter_) {
+gd::RectF rc(kTabX0 + i * (kTabW + kTabGap), tabY, kTabW, kTabH);
+// 文本矩形：向下留出整行高度，避免 GDI+ 行距导致 CJK 字形溢出胶囊（实测溢出会
+// 在胶囊外再画一份，看起来像"重影"）
+gd::RectF trc(rc.X, rc.Y, rc.Width, kTabH + 8.f);
+if (i == filter_) {  // 选中：teal 实底圆角胶囊
+    // 注意 GDI+ AddArc(x,y,w,h) 的 w/h 是椭圆【外接矩形】= 直径，不是半径。
+    // 半圆直径须取整个高度 kTabH（曾误传 kTabH/2 → 胶囊仅 14px 高、文字溢出成重影）
     gd::GraphicsPath cap;
-    float cr = 12.f;
-    cap.AddArc(rc.X, rc.Y, cr, cr, 180, 90);
-    cap.AddArc(rc.X + rc.Width - cr, rc.Y, cr, cr, 270, 90);
-    cap.AddArc(rc.X + rc.Width - cr, rc.Y + rc.Height - cr, cr, cr, 0, 90);
-    cap.AddArc(rc.X, rc.Y + rc.Height - cr, cr, cr, 90, 90);
+    float d = kTabH;
+    cap.AddArc(rc.X, rc.Y, d, d, 90, 180);
+    cap.AddArc(rc.X + rc.Width - d, rc.Y, d, d, 270, 180);
     cap.CloseFigure();
-    gd::SolidBrush act(kSelRow);
+    gd::SolidBrush act(kAccent);
     g.FillPath(&act, &cap);
+    gd::SolidBrush tc(gd::Color(255, 11, 17, 32));  // 深色文字：teal 底上对比度更高
+    g.DrawString(tabs[i], -1, &fTab, trc, &tsf, &tc);
+} else {
+    gd::SolidBrush tc(kTextMeta);
+    g.DrawString(tabs[i], -1, &fTab, trc, &tsf, &tc);
 }
-gd::SolidBrush tc(i == filter_ ? kAccentText
-: kTextMeta);
-gd::StringFormat sf;
-sf.SetAlignment(gd::StringAlignmentCenter);
-sf.SetLineAlignment(gd::StringAlignmentCenter);
-g.DrawString(tabs[i], -1, &fTab, rc, &sf, &tc);
 }
-        // ---- 头部右侧：暂�?/ 清空 / 关闭 ----
-gd::Font fBtn(L"Microsoft YaHei UI", 10.f, gd::FontStyleRegular, gd::UnitPixel);
+        // ---- 头部右侧：暂停 / 清空 / 关闭（文字胶囊按钮，44px 点击宽度）----
+gd::Font fBtn(L"Microsoft YaHei UI", 12.f, gd::FontStyleRegular, gd::UnitPixel);
 gd::StringFormat sf;
 sf.SetAlignment(gd::StringAlignmentCenter);
 sf.SetLineAlignment(gd::StringAlignmentCenter);
 bool paused = pausedGet_ ? pausedGet_() : false;
-{
-gd::RectF rc((gd::REAL)(kW - 170), 12.f, 62.f, 22.f);
-gd::Pen bp(kLine, 1.f);
-g.DrawRectangle(&bp, rc);
-gd::SolidBrush tc(paused ? kPaused : kTextMeta);
-g.DrawString(paused ? L"已暂停" : L"暂停", -1, &fBtn, rc, &sf, &tc);
+constexpr float kBtnW = 56.f, kBtnH = 26.f, kBtnGap = 8.f;
+float btnY = ((gd::REAL)kHeaderH - kBtnH) / 2.f;
+// 关闭按钮占最右 28px，其左依次是 清空、暂停
+float closeX = (gd::REAL)kW - 36.f;
+float clearX = closeX - kBtnGap - kBtnW;
+float pauseX = clearX - kBtnGap - kBtnW;
+auto pill = [&](float x, const wchar_t* label, bool danger, bool activeFill,
+                gd::Color textCol, gd::Color borderCol) {
+    gd::RectF rc(x, btnY, kBtnW, kBtnH);
+    // 同上：AddArc 的 w/h 是直径（= 按钮全高），误当半径会让胶囊高度减半
+    gd::GraphicsPath cap;
+    float d = kBtnH;
+    cap.AddArc(rc.X, rc.Y, d, d, 90, 180);
+    cap.AddArc(rc.X + rc.Width - d, rc.Y, d, d, 270, 180);
+    cap.CloseFigure();
+    if (activeFill) {
+        gd::SolidBrush fill(danger ? kDanger : kHoverRow);
+        g.FillPath(&fill, &cap);
+    } else {
+        gd::Pen bp(borderCol, 1.f);
+        g.DrawPath(&bp, &cap);
+    }
+    gd::SolidBrush tc(textCol);
+    g.DrawString(label, -1, &fBtn, rc, &sf, &tc);
+};
+pill(pauseX, paused ? L"已暂停" : L"暂停", false, false,
+     paused ? kPaused : kTextMeta, kLine);
+pill(clearX, clearArm_ ? L"确认？" : L"清空", true, clearArm_,
+     clearArm_ ? kText : kTextMeta, kDanger);
+{  // 关闭：X 图标，带悬停反馈区
+gd::RectF rc(closeX, btnY, 24.f, kBtnH);
+if (closeHot_) {
+    gd::SolidBrush hb(kHoverRow);
+    g.FillRectangle(&hb, rc);
 }
-{
-gd::RectF rc((gd::REAL)(kW - 104), 12.f, 62.f, 22.f);
-gd::Pen bp(gd::Color(clearArm_ ? 220 : 60, clearArm_ ? 248 : 255,
-clearArm_ ? 113 : 255, clearArm_ ? 113 : 255),
-1.f);
-if (clearArm_) {
-gd::SolidBrush arm(kDanger);
-g.FillRectangle(&arm, rc);
+gd::SolidBrush closecol(kTextMeta);
+gd::Pen closePen(&closecol, 1.6f);
+float cx = closeX + 6.f, cy = btnY + 7.f;
+g.DrawLine(&closePen, cx, cy, cx + 12.f, cy + 12.f);
+g.DrawLine(&closePen, cx, cy + 12.f, cx + 12.f, cy);
 }
-g.DrawRectangle(&bp, rc);
-gd::SolidBrush tc(clearArm_ ? kText
-: kTextMeta);
-g.DrawString(clearArm_ ? L"确认？" : L"清空", -1, &fBtn, rc, &sf, &tc);
-}
-{  // �?
-gd::SolidBrush closecol(gd::Color(220, 255, 255, 255));
-gd::Pen closePen(&closecol, 1.5f);
-g.DrawLine(&closePen, (gd::REAL)(kW - 30), 18.f, (gd::REAL)(kW - 16), 32.f);
-g.DrawLine(&closePen, (gd::REAL)(kW - 30), 32.f, (gd::REAL)(kW - 16), 18.f);
-}
-        // 分隔�?
+        // 分隔线
 gd::SolidBrush sep(kLine);
 g.FillRectangle(&sep, gd::RectF(8.f, (gd::REAL)kHeaderH, (gd::REAL)(w - 16), 1.f));
 
@@ -524,43 +555,81 @@ for (int vi = 0; vi < n; ++vi) {
 int row = scroll_ + vi;
 const ClipEntry& e = items_[rows_[row]];
 float y = (gd::REAL)(kHeaderH + vi * kRowH);
+// 行底：选中 > 悬停 > 无（三者互斥，避免叠加出脏色）
 if (row == sel_) {
-gd::SolidBrush hl(kSelRow);
-g.FillRectangle(&hl, gd::RectF(8.f, y + 2.f, (gd::REAL)(w - 16),
-(gd::REAL)kRowH - 4.f));
+    gd::SolidBrush hl(kSelRow);
+    g.FillRectangle(&hl, gd::RectF(8.f, y + 2.f, (gd::REAL)(w - 16), (gd::REAL)kRowH - 4.f));
+} else if (row == hoverRow_) {
+    gd::SolidBrush hv(kHoverRow);
+    g.FillRectangle(&hv, gd::RectF(8.f, y + 2.f, (gd::REAL)(w - 16), (gd::REAL)kRowH - 4.f));
 }
-if (e.pinned) {  // 置顶：左缘青色条
-gd::SolidBrush pin(kPin);
-g.FillRectangle(&pin, gd::RectF(8.f, y + 2.f, 3.f, (gd::REAL)kRowH - 4.f));
+if (e.pinned) {  // 置顶：左缘琥珀条
+    gd::SolidBrush pin(kPin);
+    g.FillRectangle(&pin, gd::RectF(8.f, y + 2.f, 3.f, (gd::REAL)kRowH - 4.f));
 }
-            // 左：缩略图（图片条目 / 指向图片文件的文件条目）或类型徽�?
-float bx = 16.f;
+// 行间细分隔线（最后一行不画）
+if (vi + 1 < n) {
+    gd::SolidBrush sep(kRowSep);
+    g.FillRectangle(&sep, gd::RectF(16.f, y + (gd::REAL)kRowH - 1.5f,
+                                    (gd::REAL)(w - 32), 1.f));
+}
+            // 左：缩略图（图片条目 / 指向图片文件的文件条目）或类型徽标
+constexpr float kBoxImg = 52.f, kBoxBadge = 36.f;
+float bx = 16.f;                 // 内容左边界
 void* thv = nullptr;
-int box = 40;
-if (e.type == "image") {
-thv = GetThumb(e);
-box = 52;  // 图片条目：预览铺满行�?
+bool isImgRow = (e.type == "image");
+bool iconOnly = false;           // 无缩略图的类型徽标
+float box = kBoxBadge;
+if (isImgRow) {
+    thv = GetThumb(e);
+    box = kBoxImg;
 } else if (e.type == "files") {
-for (auto& p : DropPaths(e)) {
-if (IsImageFile(p)) {  // 复制的是图片文件 �?直接预览该文�?                        thv = GetFileThumb(p);
-break;
+    for (auto& p : DropPaths(e)) {
+        if (IsImageFile(p)) { thv = GetFileThumb(p); break; }
+    }
+    if (EffType(e) == "image") box = kBoxImg;  // 全图文件条目：与图片行同尺寸
 }
-}
-if (EffType(e) == "image") box = 52;  // 全图文件条目：与图片行同尺寸
-}
-float by = y + (kRowH - 4 - box) / 2 + 2.f;
+if (!thv) iconOnly = true;
+// 缩略图垂直居中于行内（行高扣除上下各 2px 内边距）
+float rowTop = y + 2.f, rowH = (gd::REAL)kRowH - 4.f;
+float by = rowTop + (rowH - box) / 2.f;
 if (thv) {
 auto* th = static_cast<gd::Bitmap*>(thv);
 UINT iw = th->GetWidth(), ih = th->GetHeight();
 if (iw && ih) {
-gd::REAL s = std::min((gd::REAL)box / iw, (gd::REAL)box / ih);
-gd::REAL dw = iw * s, dh = ih * s;
-g.DrawImage(th, bx + (box - dw) / 2, by + (box - dh) / 2, dw, dh);
+// 缩略图衬底（极扁/极窄图也能看出边界）
+gd::SolidBrush plate(kThumbBg);
+g.FillRectangle(&plate, gd::RectF(bx, by, box, box));
+gd::InterpolationMode oldMode = g.GetInterpolationMode();
+g.SetInterpolationMode(gd::InterpolationModeHighQualityBicubic);
+float aspect = (float)iw / (float)ih;
+if (aspect > 3.0f || aspect < 0.34f) {
+    // 极端长宽比（如 696×37 聊天截图 / 长图）：等比放入会缩成看不清的细线，
+    // 改为「填满衬底 + 居中裁剪」，至少能辨认内容
+    if (aspect > 1.f) {  // 宽扁：横向裁剪
+        gd::REAL visibleW = ih;  // 取 1:1 高度对应的宽度，剩余左右裁掉
+        if (visibleW > iw) visibleW = (gd::REAL)iw;
+        gd::REAL sx = ((gd::REAL)iw - visibleW) / 2.f;
+        gd::RectF dst(bx, by, (gd::REAL)box, (gd::REAL)box);
+        g.DrawImage(th, dst, sx, 0.f, visibleW, (gd::REAL)ih, gd::UnitPixel);
+    } else {  // 高窄：纵向裁剪
+        gd::REAL visibleH = iw;
+        if (visibleH > ih) visibleH = (gd::REAL)ih;
+        gd::REAL sy = ((gd::REAL)ih - visibleH) / 2.f;
+        gd::RectF dst(bx, by, (gd::REAL)box, (gd::REAL)box);
+        g.DrawImage(th, dst, 0.f, sy, (gd::REAL)iw, visibleH, gd::UnitPixel);
+    }
+} else {
+    gd::REAL s = std::min((gd::REAL)box / iw, (gd::REAL)box / ih);
+    gd::REAL dw = iw * s, dh = ih * s;
+    g.DrawImage(th, bx + (box - dw) / 2.f, by + (box - dh) / 2.f, dw, dh);
+}
+g.SetInterpolationMode(oldMode);
 if (row == sel_) {  // 选中态：青色描边
 gd::Pen tp(kAccent, 1.5f);
 g.DrawRectangle(&tp, bx, by, (gd::REAL)box, (gd::REAL)box);
 }
-if (e.type == "files" || e.type == "image") {  // 多图角标�?N
+if (e.type == "files" || e.type == "image") {  // 多图角标：+N
 int imgTotal = 0;
 if (e.type == "files") {
 for (auto& p : DropPaths(e))
@@ -605,24 +674,29 @@ const wchar_t* glyph = e.type == "html"  ? L"表"
 : L"文";
 g.DrawString(glyph, -1, &fTab, rc, &cf, &tc);
 }
-            // 中：元信�?+ 预览（图片条目不显示文本预览——内容即图，元信息带尺寸�?
-float tx = 76.f, tw = (gd::REAL)(kW - 76 - 104);  // 76�?2px 缩略�?16..68) + 8px 间距
+            // 中：元信息 + 预览（图片条目无文本预览——内容即图，元信息带尺寸）
+// 文本列起点：缩略图区（16..16+box）+ 12px 间距；右端留出按钮区宽度
+float tx = bx + box + 12.f;
+float tw = (gd::REAL)(kW - tx - 100.f);
 std::wstring meta = TimeStr(e.ts);
 if (!e.source.empty()) meta += L" · " + e.source;
 meta += L" · " + TypeTag(EffType(e)) + L" · " + SizeStr(e);
 if (e.type == "image" && e.imgW > 0)
 meta += L" · " + std::to_wstring(e.imgW) + L"×" + std::to_wstring(e.imgH);
 gd::SolidBrush mcol(kTextMeta);
-float metaY = e.type == "image" ? y + 20.f : y + 8.f;
+// 元信息 14px 行 + 预览 2 行 34px = 48px，整体在行内垂直居中
+bool hasPreview = (e.type != "image");
+float metaH = 15.f, prevH = hasPreview ? 34.f : 0.f;
+float blockH = metaH + (hasPreview ? 4.f + prevH : 0.f);
+float textTop = rowTop + (rowH - blockH) / 2.f;
 g.DrawString(meta.c_str(), (INT)meta.size(), &fMeta,
-gd::RectF(tx, metaY, tw, 16.f), &trim, &mcol);
-if (e.type != "image") {
+gd::RectF(tx, textTop, tw, metaH), &trim, &mcol);
+if (hasPreview) {
 std::wstring prev;
 if (e.type == "files") {
-                    // files 行预览由路径载荷现场生成——历史条目的 e.text 可能�?                    // 旧版误存为裸路径多行列表
+// files 行预览由路径载荷现场生成（历史条目的 e.text 可能是旧版误存的裸路径列表）
 auto paths = DropPaths(e);
 if (!paths.empty()) {
-prev = std::to_wstring(paths.size()) + L" 个文件：";
 for (size_t i = 0; i < paths.size() && i < 3; ++i) {
 auto& f = paths[i];
 prev += f.substr(f.find_last_of(L"\\/") + 1);
@@ -634,11 +708,16 @@ if (paths.size() > 3) prev += L"…";
 prev = e.text;
 }
 bool noPrev = prev.empty();
-gd::SolidBrush pcol(noPrev ? kTextDim
-: kText);
-g.DrawString((noPrev ? L"（无预览）" : prev).c_str(),
-(INT)(noPrev ? 5 : prev.size()), &fPrev,
-gd::RectF(tx, y + 26.f, tw, 32.f), &trim, &pcol);  // 两行预览
+gd::SolidBrush pcol(noPrev ? kTextDim : kText);
+if (noPrev) {
+gd::StringFormat vc;
+vc.SetLineAlignment(gd::StringAlignmentCenter);
+g.DrawString(L"（无预览内容）", -1, &fPrev,
+gd::RectF(tx, textTop + metaH + 4.f, tw, prevH), &vc, &pcol);
+} else {
+g.DrawString(prev.c_str(), (INT)prev.size(), &fPrev,
+gd::RectF(tx, textTop + metaH + 4.f, tw, prevH), &trim, &pcol);  // 两行预览
+}
 }
             // 右：�?/ 删（MDL2 图标；点击行本体即复制，无独立复制按钮）
 auto drawBtn = [&](const RECT& rcIn, const wchar_t* glyph, bool active) {
@@ -1178,18 +1257,25 @@ TrackMouseEvent(&tme);
 self->trackMouse_ = true;
 }
 int row = self->HitRow(x, y);
-if (row >= 0 && row < 3000 && row != self->sel_) {  // 行本体悬停跟?
-self->sel_ = row;
-self->Draw();
+// 悬停只做视觉反馈，不改变选中项（原实现 sel_ = row 会让鼠标移动即抢走
+// 键盘选中，方向键导航随即失效——两者互相打架）
+int hrow = (row >= 0 && row < 3000) ? row : -1;
+bool closeHot = (self->HitHeader(x, y) == 202);
+if (hrow != self->hoverRow_ || closeHot != self->closeHot_) {
+    self->hoverRow_ = hrow;
+    self->closeHot_ = closeHot;
+    self->Draw();
 }
-self->UpdateHover(row >= 0 && row < 3000 ? row : -1);
+self->UpdateHover(hrow);
 return 0;
 }
 case WM_MOUSELEAVE:
 self->trackMouse_ = false;
 self->hoverRow_ = -1;
+self->closeHot_ = false;
 KillTimer(hwnd, 1);
 self->HidePreview();
+self->Draw();
 return 0;
 case WM_TIMER:
 if (wp == 1) {  // 悬停计时到：弹出该行放大预览
