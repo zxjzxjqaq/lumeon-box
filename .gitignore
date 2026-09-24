@@ -4,3 +4,8 @@ build/
 _docs_tmp/
 
 installer/
+
+# 工具/agent 产物（本机环境，不入库）
+.claude/
+skills-lock.json
+LumenBox-Diag.zip

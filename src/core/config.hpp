@@ -26,6 +26,13 @@ struct SpikeConfig {
     std::string watcherMode = "off";
     // M2：双击隐藏图标实现（hook|hotkey）
     std::string hideIconsMode = "hook";
+    // M5：剪贴板历史（设计文档 D7–D9 已拍板）
+    bool clipboardEnabled = true;
+    std::string clipboardHotkey = "Ctrl+B";  // 呼出热键（可改）
+    int clipboardMaxEntries = 100;           // 条数上限（20–500）
+    int clipboardBlobMB = 64;                // 磁盘 blob 硬顶（MB）
+    bool clipboardRecordSource = true;       // 记录来源 exe 名
+    bool clipboardPaused = false;            // 暂停记录（托盘/面板共享，持久化）
 };
 
 // 新装/无 boxes 时的默认两盒：待办 + 默认容器

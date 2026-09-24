@@ -37,6 +37,12 @@ SpikeConfig ConfigStore::load() const {
         c.h = j.value("h", c.h);
         c.watcherMode = j.value("watcherMode", c.watcherMode);
         c.hideIconsMode = j.value("hideIconsMode", c.hideIconsMode);
+        c.clipboardEnabled = j.value("clipboardEnabled", c.clipboardEnabled);
+        c.clipboardHotkey = j.value("clipboardHotkey", c.clipboardHotkey);
+        c.clipboardMaxEntries = j.value("clipboardMaxEntries", c.clipboardMaxEntries);
+        c.clipboardBlobMB = j.value("clipboardBlobMB", c.clipboardBlobMB);
+        c.clipboardRecordSource = j.value("clipboardRecordSource", c.clipboardRecordSource);
+        c.clipboardPaused = j.value("clipboardPaused", c.clipboardPaused);
         if (j.contains("boxes") && j["boxes"].is_array() && !j["boxes"].empty()) {
             std::vector<BoxDef> loaded;
             for (auto& e : j["boxes"]) {
@@ -64,6 +70,11 @@ SpikeConfig ConfigStore::load() const {
             c.watcherMode = "off";
         if (c.hideIconsMode != "hook" && c.hideIconsMode != "hotkey")
             c.hideIconsMode = "hook";
+        // 剪贴板参数护栏（非法值回默认）
+        if (c.clipboardMaxEntries < 20) c.clipboardMaxEntries = 20;
+        if (c.clipboardMaxEntries > 500) c.clipboardMaxEntries = 500;
+        if (c.clipboardBlobMB < 8) c.clipboardBlobMB = 8;
+        if (c.clipboardBlobMB > 512) c.clipboardBlobMB = 512;
     } catch (...) {
         c.boxes = DefaultBoxes();  // 损坏即回默认两盒，绝不阻塞启动
     }
@@ -86,7 +97,13 @@ bool ConfigStore::save(const SpikeConfig& c) const {
                  {"w", c.w},
                  {"h", c.h},
                  {"watcherMode", c.watcherMode},
-                 {"hideIconsMode", c.hideIconsMode}};
+                 {"hideIconsMode", c.hideIconsMode},
+                 {"clipboardEnabled", c.clipboardEnabled},
+                 {"clipboardHotkey", c.clipboardHotkey},
+                 {"clipboardMaxEntries", c.clipboardMaxEntries},
+                 {"clipboardBlobMB", c.clipboardBlobMB},
+                 {"clipboardRecordSource", c.clipboardRecordSource},
+                 {"clipboardPaused", c.clipboardPaused}};
     std::error_code ec;
     fs::create_directories(file_.parent_path(), ec);
     auto tmp = file_.wstring() + L".tmp";
