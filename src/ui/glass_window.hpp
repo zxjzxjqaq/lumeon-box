@@ -16,6 +16,7 @@ struct SpikeConfig;
 class GlassWindow {
 public:
     // on_key 收到 WM_HOTKEY 的热键 id（非虚拟键）；ESC 在内部直接退出
+    // 可重复调用：主窗口被外部销毁后重建（Explorer 重启恢复）
     bool Create(HINSTANCE hInst, const std::wstring& title, struct SpikeConfig& cfg,
                 std::function<void(UINT id)> on_key);
 
@@ -37,12 +38,25 @@ public:
     // WM_NCHITTEST 委托：返回 HTTRANSPARENT 穿透 / HTCLIENT 交互（贴桌模式必须穿透空白区）
     void OnHitTest(std::function<int(float x, float y)> cb) { on_hittest_ = std::move(cb); }
 
+    // 主窗口被外部销毁（父窗口 WorkerW 随 Explorer 重启级联销毁）时回调，
+    // 用于重建窗口而非退出进程；返回 true 表示已接管（不退出消息循环）。
+    void OnDestroyed(std::function<bool()> cb) { on_destroyed_ = std::move(cb); }
+    // 标记「用户主动退出」：此时 WM_DESTROY 才真正退出消息循环
+    void SetQuitOnDestroy(bool q) { quit_on_destroy_ = q; }
+    // 重建后刷新句柄（窗口被销毁后由宿主重新 Create）
+    void SetHwnd(HWND h) { hwnd_ = h; }
+
+    HINSTANCE Instance() const { return hinst_; }
+
 private:
     static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
     void ApplyBackdrop();   // Win11 Acrylic → Win10 模糊 → 纯卡片底色，三级退化
     void SaveBounds();
 
     HWND hwnd_ = nullptr;
+    HINSTANCE hinst_ = nullptr;
+    bool quit_on_destroy_ = false;
+    std::function<bool()> on_destroyed_;
     struct SpikeConfig* cfg_ = nullptr;
     std::function<void(UINT id)> on_key_;
     std::function<void(HWND, UINT)> on_timer_;

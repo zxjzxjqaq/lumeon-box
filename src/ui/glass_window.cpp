@@ -28,6 +28,7 @@ static bool IsWin11OrGreater() {
 bool GlassWindow::Create(HINSTANCE hInst, const std::wstring& title,
                          SpikeConfig& cfg, std::function<void(UINT)> on_key) {
     cfg_ = &cfg;
+    hinst_ = hInst;
     on_key_ = std::move(on_key);
 
     WNDCLASSEXW wc{};
@@ -41,7 +42,7 @@ bool GlassWindow::Create(HINSTANCE hInst, const std::wstring& title,
     wc.hIconSm = static_cast<HICON>(LoadImageW(hInst, MAKEINTRESOURCEW(IDI_APP), IMAGE_ICON,
                                                GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTSIZE));
     wc.lpszClassName = L"LumenBoxGlass";
-    RegisterClassExW(&wc);
+    RegisterClassExW(&wc);  // 重建时已注册（返回 0/ERROR_CLASS_ALREADY_EXISTS），无害
 
     hwnd_ = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOOLWINDOW,
                             wc.lpszClassName, title.c_str(), WS_POPUP,
@@ -50,6 +51,8 @@ bool GlassWindow::Create(HINSTANCE hInst, const std::wstring& title,
     dpi_ = static_cast<float>(GetDpiForWindow(hwnd_));
     StageTrace("c:window-hwnd");
 
+    // 重建路径：DComp 目标已绑定到旧 HWND，需为新窗口重建
+    gfx_ = GraphicsContext{};
     if (!gfx_.InitForWindow(hwnd_)) return false;
     StageTrace("c:dcomp-target");
 
@@ -122,7 +125,10 @@ LRESULT GlassWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_KEYDOWN:
         if (self && self->on_keyboard_ && self->on_keyboard_(WM_KEYDOWN, static_cast<UINT>(wp)))
             return 0;
-        if (wp == VK_ESCAPE) DestroyWindow(hwnd);
+        if (wp == VK_ESCAPE) {
+            if (self) self->quit_on_destroy_ = true;  // ESC = 用户主动退出
+            DestroyWindow(hwnd);
+        }
         return 0;
     case WM_CHAR:
         if (self && self->on_keyboard_ && self->on_keyboard_(WM_CHAR, static_cast<UINT>(wp)))
@@ -145,6 +151,12 @@ LRESULT GlassWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         break;
     case WM_DESTROY:
         if (self) self->SaveBounds();
+        // 父窗口（WorkerW）随 Explorer 重启被销毁时会级联销毁本窗口——此时不能退出
+        // 消息循环，交给宿主重建；只有用户主动退出（SetQuitOnDestroy）才真正退出。
+        if (self && self->on_destroyed_ && !self->quit_on_destroy_) {
+            self->hwnd_ = nullptr;
+            if (self->on_destroyed_()) return 0;
+        }
         PostQuitMessage(0);
         return 0;
     }
@@ -154,6 +166,7 @@ LRESULT GlassWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 }
 
 void GlassWindow::SaveBounds() {
+    if (!cfg_ || !hwnd_) return;
     RECT r{};
     GetWindowRect(hwnd_, &r);
     cfg_->x = r.left;

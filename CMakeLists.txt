@@ -38,6 +38,11 @@ add_executable(deskmenu_probe tools/deskmenu_probe.cpp)
 target_link_libraries(deskmenu_probe PRIVATE shell32 ole32 oleaut32)
 target_compile_definitions(deskmenu_probe PRIVATE UNICODE _UNICODE)
 target_compile_options(deskmenu_probe PRIVATE /utf-8)
+# 容器窗口探测：验证 Explorer 重启后容器是否自动回归（子窗口也要查，FindWindow 不可用）
+add_executable(lbprobe tools/lbprobe.cpp)
+target_link_libraries(lbprobe PRIVATE user32)
+target_compile_definitions(lbprobe PRIVATE UNICODE _UNICODE)
+target_compile_options(lbprobe PRIVATE /utf-8)
 add_test(NAME core COMMAND core_tests)
 
 # ---- 应用图标资源（rc.exe 按系统 ANSI 读取 .rc，中文路径会乱码；故拷贝到 build 目录用纯 ASCII 名）----

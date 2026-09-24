@@ -45,6 +45,9 @@ public:
     void SetPaused(bool p) { paused_ = p; }
     bool Paused() const { return paused_; }
 
+    // 主窗口被重建（Explorer 重启恢复）后更新通知目标句柄
+    void SetNotifyWindow(HWND h) { notify_ = h; }
+
 private:
     static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 

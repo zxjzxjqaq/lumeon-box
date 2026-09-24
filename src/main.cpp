@@ -1,6 +1,7 @@
 #include <windows.h>
 #include <algorithm>
 #include <filesystem>
+#include <functional>
 #include <knownfolders.h>
 #include <shlobj.h>
 #include "anim/spring_demo.hpp"  // M0 演示保留编译；主流程不再使用
@@ -36,11 +37,80 @@ static std::wstring KnownPath(REFKNOWNFOLDERID id) {
     return p;
 }
 
+// 常驻宿主窗口：不属于桌面层、不会被 Explorer 重启销毁，专用于在容器窗口消失后
+// 仍持续派发健康检查定时器与 TaskbarCreated 广播（容器被级联销毁时其窗口级定时器
+// 与消息都会一起消失，恢复逻辑将永远没机会执行）。
+struct HostCtx {
+    std::function<bool()>* recover = nullptr;   // 容器重建
+    std::function<void()>* resync = nullptr;    // 托盘/桌面层重挂
+    UINT taskbarCreated = 0;
+    HWND container = nullptr;
+    bool* quitRequested = nullptr;
+    bool independent = false;                   // 独立模式：不检查父宿主
+};
+
+static LRESULT CALLBACK HostProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+    auto* c = reinterpret_cast<HostCtx*>(GetWindowLongPtrW(h, GWLP_USERDATA));
+    if (msg == WM_NCCREATE) {
+        auto* cs = reinterpret_cast<CREATESTRUCTW*>(lp);
+        SetWindowLongPtrW(h, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(cs->lpCreateParams));
+        return DefWindowProcW(h, msg, wp, lp);
+    }
+    if (!c) return DefWindowProcW(h, msg, wp, lp);
+    if (msg == c->taskbarCreated && c->taskbarCreated) {
+        if (c->resync && *c->resync) (*c->resync)();
+        return 0;
+    }
+    if (msg == WM_TIMER && wp == 9) {
+        HWND cur = c->container;
+        if (!cur || !IsWindow(cur)) {
+            StageTrace("h:container-gone");
+            if (c->recover && *c->recover) (*c->recover)();
+            return 0;
+        }
+        if (!c->independent) {  // 贴桌/置底：父宿主必须还在（Explorer 重启会换新）
+            HWND par = GetParent(cur);
+            if (!par || !IsWindow(par)) {
+                StageTrace("h:host-gone");
+                if (c->recover && *c->recover) (*c->recover)();
+            }
+        }
+        return 0;
+    }
+    return DefWindowProcW(h, msg, wp, lp);
+}
+
+// 查找已运行实例的容器窗口：贴桌/置底模式下它是 WorkerW 的子窗口，FindWindowW 只找
+// 顶层窗口必然失败——必须同时枚举顶层与子窗口（否则正常二次启动会被误判为僵尸实例）。
+static BOOL CALLBACK FindByPidProc(HWND h, LPARAM lp) {
+    auto* ctx = reinterpret_cast<std::pair<DWORD, HWND>*>(lp);
+    DWORD pid = 0;
+    GetWindowThreadProcessId(h, &pid);
+    if (pid == ctx->first) {
+        wchar_t cls[64]{};
+        GetClassNameW(h, cls, 64);
+        if (wcscmp(cls, L"LumenBoxGlass") == 0) {
+            ctx->second = h;
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+// 检测「已有实例」：宿主窗口（LumenBoxHost，常驻且顶层）存在即算在运行。
+static bool ExistingInstanceAlive() {
+    if (HWND h = FindWindowW(L"LumenBoxHost", nullptr)) {
+        DWORD pid = 0;
+        GetWindowThreadProcessId(h, &pid);
+        if (pid && pid != GetCurrentProcessId()) return true;
+    }
+    return false;
+}
+
 static int Run(HINSTANCE hInst, const wchar_t* cmd) {
     StageTrace("0:enter-run");
     // OLE STA：RegisterDragDrop 的前置（拖拽归位 S4）
     if (FAILED(OleInitialize(nullptr))) StageTrace("ole-init-FAILED");
-
     const std::wstring appData = ConfigStore::default_dir().wstring();
     const std::wstring cfgPath = appData + L"\\config.json";
 
@@ -65,6 +135,8 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
     std::vector<std::wstring> pendingBatch;   // watcher 批次的累积（UI 线程防抖）
     bool watcherStarted = false;              // watcher 线程是否已运行
     bool visible = true;
+    std::function<bool()> recoverFromShellRestart;  // Explorer 重启恢复（定义于下方）
+    std::function<void()> resyncShell;              // 托盘/桌面层重挂（定义于下方）
 
     // M2：应用索引启动时读一次并缓存（快速搜索用）；不建全盘索引
     AppIndex appIndex;
@@ -219,6 +291,32 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
     };
     win.OnTimer([&](HWND h, UINT id) {
         if (id == 3) { flushPending(); return; }
+        if (id == 9) {  // 桌面层健康检查：宿主 WorkerW 消失/窗口脱离则重挂或重建
+            static HWND lastHost = nullptr;
+            HWND cur = win.hwnd();
+            bool needRepair = false;
+            if (!cur || !IsWindow(cur)) {
+                needRepair = true;  // 窗口已销毁（未走 WM_DESTROY 的非常规路径）
+            } else if (mode != DesktopMode::Independent) {
+                // 贴桌/置底模式：确认父宿主仍在。宿主被 Explorer 销毁后本窗口会变成
+                // 孤儿（IsWindow 为真但不再显示、拖放/点击失效）——必须重建。
+                HWND par = GetParent(cur);
+                if (!par || !IsWindow(par)) {
+                    needRepair = true;
+                } else {
+                    lastHost = par;
+                    RECT r{};
+                    if (GetWindowRect(cur, &r) && !IsWindowVisible(cur) && visible) {
+                        ShowWindow(cur, SW_SHOW);  // 仅隐藏：直接显示即可
+                    }
+                }
+            }
+            if (needRepair && !recoverFromShellRestart()) {
+                win.SetQuitOnDestroy(true);
+                if (win.hwnd()) DestroyWindow(win.hwnd());
+            }
+            return;
+        }
         grid.OnTimer(h, id);
     });
     win.OnMouse([&](UINT msg, float x, float y) { grid.OnMouse(win.hwnd(), msg, x, y); });
@@ -316,6 +414,77 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
     if (!tray.Add(win.hwnd(), WM_APP + 1, LoadIconW(hInst, MAKEINTRESOURCEW(IDI_APP)),
                   L"LumenBox 桌面整理"))
         StageTrace("tray-add-FAILED");
+
+    // 常驻宿主窗口（见 HostProc 说明）：容器被 Explorer 级联销毁后，靠它继续派发
+    // 健康检查与 TaskbarCreated 广播，实现自动恢复（不再变僵尸进程）。
+    // 须在 resyncShell/recoverFromShellRestart 之前创建（二者引用 hostCtx）。
+    WNDCLASSEXW hwc{};
+    hwc.cbSize = sizeof(hwc);
+    hwc.lpfnWndProc = &HostProc;
+    hwc.hInstance = hInst;
+    hwc.lpszClassName = L"LumenBoxHost";
+    RegisterClassExW(&hwc);
+    UINT wmTaskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
+    bool quitRequested = false;
+    HostCtx hostCtx;
+    hostCtx.recover = &recoverFromShellRestart;
+    hostCtx.resync = &resyncShell;
+    hostCtx.taskbarCreated = wmTaskbarCreated;
+    hostCtx.container = win.hwnd();
+    hostCtx.quitRequested = &quitRequested;
+    HWND hostWnd = CreateWindowExW(0, L"LumenBoxHost", L"LumenBoxHost", 0, 0, 0, 0, 0,
+                                   HWND_MESSAGE, nullptr, hInst, &hostCtx);
+    if (!hostWnd) {
+        StageTrace("hostwnd-create-FAILED");
+    } else {
+        StageTrace("hostwnd-ready");
+        SetTimer(hostWnd, 9, 1500, nullptr);  // 健康检查（挂常驻窗口，容器死也照跑）
+    }
+
+    // Explorer 重启恢复（见 HostProc 说明）：重建主窗口 + 重挂全部窗口级资源
+    resyncShell = [&] {
+        StageTrace("r:shell-resync");
+        tray.Add(win.hwnd(), WM_APP + 1, LoadIconW(hInst, MAKEINTRESOURCEW(IDI_APP)),
+                 L"LumenBox 桌面整理");
+        if (mode == DesktopMode::DesktopLayer) {
+            if (!AttachToDesktopLayer(win.hwnd())) UseBottomMode(win.hwnd());
+        } else if (mode == DesktopMode::Bottom) {
+            UseBottomMode(win.hwnd());
+        }
+        grid.Refresh();
+    };
+    recoverFromShellRestart = [&]() -> bool {
+        StageTrace("r:shell-restart-rebuild");
+        Sleep(150);  // 等 Explorer 把新 WorkerW 建出来
+        if (!win.Create(hInst, L"LumenBox", cfg, on_key)) {
+            StageTrace("r:recreate-FAILED");
+            return false;  // 重建失败 → 正常退出，不留僵尸
+        }
+        HWND h = win.hwnd();
+        hostCtx.container = h;
+        RemoveHideHook();
+        if (cfg.hideIconsMode == "hook" && !InstallHideHook(h, WM_APP + 3))
+            StageTrace("r:hook-reinstall-FAILED");
+        RegisterHotKey(h, 1, MOD_CONTROL | MOD_ALT, '1');
+        RegisterHotKey(h, 4, MOD_CONTROL | MOD_NOREPEAT, VK_SPACE);
+        if (cfg.clipboardEnabled &&
+            !RegisterHotKey(h, 5, MOD_CONTROL | MOD_NOREPEAT, 'B'))
+            RegisterHotKey(h, 5, MOD_CONTROL | MOD_ALT, 'B');
+        if (cfg.hideIconsMode != "hook") RegisterHotKey(h, 3, MOD_CONTROL | MOD_ALT, 'H');
+        clipMon.SetNotifyWindow(h);
+        dropTarget.SetWindow(h);
+        RegisterDragDrop(h, &dropTarget);
+        grid.SetWindowHandle(h);
+        grid.Init(win.gfx(), win.Root(), win.DpiScale());
+        grid.Refresh();
+        if (mode == DesktopMode::DesktopLayer && !AttachToDesktopLayer(h))
+            UseBottomMode(h);
+        else if (mode == DesktopMode::Bottom)
+            UseBottomMode(h);
+        StageTrace("r:recreate-OK");
+        return true;
+    };
+    win.OnDestroyed([&]() -> bool { return recoverFromShellRestart(); });
     // §5.1 P0：热键冲突一次性提示（托盘气泡，不阻塞主流程）
     if (ctrlSpaceFailed)
         tray.Balloon(L"热键冲突", L"Ctrl+Space 被占用，快速搜索暂不可用（可在设置后重试）。");
@@ -409,7 +578,10 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
                     if (bi >= 0) grid.BeginRename(bi);
                     break;
                 }
-                case 9: DestroyWindow(win.hwnd()); break;
+                case 9:
+                    win.SetQuitOnDestroy(true);  // 用户主动退出：WM_DESTROY 才真正结束循环
+                    DestroyWindow(win.hwnd());
+                    break;
                 }
             } else if (LOWORD(lp) == WM_LBUTTONDBLCLK) {
                 toggleVisible();
@@ -445,6 +617,7 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
         }
     }
     StageTrace("6:loop-exited");
+    if (hostWnd) DestroyWindow(hostWnd);
     clipMon.Stop();  // 剪贴板监听：先停线程再销毁监听窗（须主线程）
     watcher.Stop();
     boxWatcher.Stop();
@@ -460,22 +633,37 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR lpCmdLine, int) {
     if (!SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2))
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_SYSTEM_AWARE);
 
-    // 单实例：命名互斥体。第二次启动会 ERROR_ALREADY_EXISTS → 唤醒已开窗口并退出本次。
+    // 单实例：命名互斥体。第二次启动会唤醒已开窗口并退出本次。
+    // 僵尸实例处理：若互斥体存在但宿主/容器窗口都不在了（Explorer 重启级联销毁后
+    // 的旧版遗留），不能静默退出——否则用户既进不去也退不出（只能任务管理器杀进程）。
+    // 判定必须用 ExistingInstanceAlive()：贴桌模式下容器是 WorkerW 子窗口，
+    // FindWindowW 找不到，直接用它会误判为僵尸并开出第二个实例。
     HANDLE inst = CreateMutexW(nullptr, TRUE, L"LumenBox_SingleInstanceMutex");
     if (inst && GetLastError() == ERROR_ALREADY_EXISTS) {
-        HWND w = FindWindowW(L"LumenBoxGlass", nullptr);
-        if (w) {
-            ShowWindow(w, SW_RESTORE);
-            SetForegroundWindow(w);
+        if (ExistingInstanceAlive()) {
+            HWND w = FindWindowW(L"LumenBoxGlass", nullptr);
+            if (w && IsWindow(w)) {
+                ShowWindow(w, SW_RESTORE);
+                SetForegroundWindow(w);
+            }
+            CloseHandle(inst);
+            return 0;  // 已有实例在运行（正常），本次直接退出，避免多开
         }
-        CloseHandle(inst);
-        return 0;  // 已有实例在运行，本次直接退出，避免多开
+        StageTrace("single-instance-zombie-takeover");  // 旧实例已成僵尸，本次接管
     }
 
     int exit_code = 0;
     std::string err;
     try {
         exit_code = Run(hInst, lpCmdLine);
+        if (exit_code == 1) {  // 窗口创建失败：多为同名窗口类被僵尸实例占用
+            if (FindWindowW(nullptr, L"LumenBox") == nullptr) {
+                MessageBoxW(nullptr,
+                            L"启动失败：可能仍有 LumenBox 旧进程残留（占用窗口类或单实例锁）。\n"
+                            L"请打开任务管理器结束所有 lumenbox.exe 后重试。",
+                            L"LumenBox", MB_ICONWARNING);
+            }
+        }
     } catch (std::exception const& e) {
         exit_code = 2;
         err = e.what();
