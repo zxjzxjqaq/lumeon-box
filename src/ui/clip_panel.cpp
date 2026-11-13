@@ -11,24 +11,24 @@ namespace gd = Gdiplus;
 namespace {
 // ---- 设计 token（ui-ux-pro-max：Slate 深色�?+ Teal 强调，扁平无阴影�?---
 // 对比度均 �?4.5:1�?F1F5F9/#0F172A�?6:1�?94A3B8/#0F172A�?.4:1�?2DD4BF/#0F172A�?:1
-const gd::Color kPanelBg(255, 15, 23, 42);     // #0F172A slate-900 面板底（须不透明：
+const gd::Color kPanelBg(255, 11, 14, 20);     // #0F172A slate-900 面板底（须不透明：
                                                // 分层窗 alpha<255 会让桌面内容透出，实测很脏）
-const gd::Color kPanelStroke(255, 45, 58, 78); // #2D3A4E 面板描边
-const gd::Color kText(255, 241, 245, 249);     // #F1F5F9 slate-100 主文字
-const gd::Color kTextMeta(255, 148, 163, 184); // #94A3B8 slate-400 元信息
-const gd::Color kTextDim(255, 100, 116, 139);  // #64748B slate-500 弱提示
-const gd::Color kAccent(255, 20, 184, 166);    // #14B8A6 teal-500 强调
-const gd::Color kAccentText(255, 45, 212, 191);// #2DD4BF teal-400 强调文字
-const gd::Color kSelRow(255, 24, 51, 60);      // 选中行：teal 调深实底
-const gd::Color kHoverRow(255, 30, 41, 59);    // #1E293B slate-800 悬停底
-const gd::Color kThumbBg(255, 11, 17, 32);     // #0B1120 缩略图衬底
-const gd::Color kLine(255, 41, 53, 72);        // #293548 分隔线/按钮描边
-const gd::Color kRowSep(255, 30, 41, 59);      // 行间细分隔线
-const gd::Color kPin(255, 245, 158, 11);       // #F59E0B amber 置顶标记
+const gd::Color kPanelStroke(255, 38, 44, 60); // #2D3A4E 面板描边
+const gd::Color kText(255, 235, 238, 245);     // #F1F5F9 slate-100 主文字
+const gd::Color kTextMeta(255, 150, 158, 172); // #94A3B8 slate-400 元信息
+const gd::Color kTextDim(255, 110, 118, 132);  // #64748B slate-500 弱提示
+const gd::Color kAccent(255, 34, 211, 238);    // #14B8A6 teal-500 强调
+const gd::Color kAccentText(255, 129, 140, 248);// #2DD4BF teal-400 强调文字
+const gd::Color kSelRow(255, 18, 30, 44);      // 选中行：teal 调深实底
+const gd::Color kHoverRow(255, 22, 27, 40);    // #1E293B slate-800 悬停底
+const gd::Color kThumbBg(255, 8, 11, 17);     // #0B1120 缩略图衬底
+const gd::Color kLine(255, 38, 44, 60);        // #293548 分隔线/按钮描边
+const gd::Color kRowSep(255, 26, 31, 44);      // 行间细分隔线
+const gd::Color kPin(255, 192, 132, 252);       // #F59E0B amber 置顶标记
 const gd::Color kDanger(255, 239, 68, 68);     // #EF4444 破坏性操作
 const gd::Color kPaused(255, 245, 158, 11);    // 暂停态琥珀
-const gd::Color kPreviewBg(255, 15, 23, 42);   // 悬停预览窗底（不透明，同面板）
-const gd::Color kToastBg(255, 15, 23, 42);     // Toast 底（不透明）
+const gd::Color kPreviewBg(255, 11, 14, 20);   // 悬停预览窗底（不透明，同面板）
+const gd::Color kToastBg(255, 11, 14, 20);     // Toast 底（不透明）
 }  // namespace
 
 namespace lb {
@@ -446,7 +446,13 @@ path.AddArc(0.5f, h - r - 0.5f, r, r, 90, 90);
 path.CloseFigure();
 gd::SolidBrush bg(kPanelBg);
 g.FillPath(&bg, &path);
-gd::Pen stroke(kPanelStroke, 1.f);
+gd::LinearGradientBrush aurora(gd::PointF(0, 0), gd::PointF((gd::REAL)w, (gd::REAL)h),
+                               gd::Color(0, 0, 0, 0), gd::Color(0, 0, 0, 0));
+gd::Color acols[3] = {gd::Color(120, 34, 211, 238), gd::Color(120, 129, 140, 248),
+                      gd::Color(120, 192, 132, 252)};
+gd::REAL apos[3] = {0.f, 0.5f, 1.f};
+aurora.SetInterpolationColors(acols, apos, 3);
+gd::Pen stroke(&aurora, 1.2f);
 g.DrawPath(&stroke, &path);
 
         // ---- 头部：过滤 Tab（圆角胶囊，间距 8px；高度随 kHeaderH 居中）----
@@ -474,7 +480,7 @@ if (i == filter_) {  // 选中：teal 实底圆角胶囊
     cap.CloseFigure();
     gd::SolidBrush act(kAccent);
     g.FillPath(&act, &cap);
-    gd::SolidBrush tc(gd::Color(255, 11, 17, 32));  // 深色文字：teal 底上对比度更高
+    gd::SolidBrush tc(gd::Color(255, 11, 14, 20));  // 深色文字：teal 底上对比度更高
     g.DrawString(tabs[i], -1, &fTab, trc, &tsf, &tc);
 } else {
     gd::SolidBrush tc(kTextMeta);
@@ -644,7 +650,7 @@ std::wstring n = L"+" + std::to_wstring(imgTotal - 1);
 gd::SolidBrush nb(kAccent);
 gd::RectF nrc(bx + box - 24, by + box - 18, 22.f, 16.f);
 g.FillRectangle(&nb, nrc);
-gd::SolidBrush ntc(gd::Color(255, 12, 15, 23));
+gd::SolidBrush ntc(gd::Color(255, 11, 14, 20));
 gd::StringFormat nf2;
 nf2.SetAlignment(gd::StringAlignmentCenter);
 nf2.SetLineAlignment(gd::StringAlignmentCenter);
@@ -751,7 +757,7 @@ float t = rows_.size() > vis
                           ? (float)scroll_ / (float)(rows_.size() - vis)
                           : 0.f;
 float ty = trackY0 + (trackH - thumbH) * t;
-gd::SolidBrush sb(gd::Color((int)(220 * scrollAlpha_), 20, 184, 166));
+gd::SolidBrush sb(gd::Color((int)(220 * scrollAlpha_), 34, 211, 238));
 g.FillRectangle(&sb, gd::RectF((gd::REAL)(w - 4), ty, 2.5f, thumbH));
 }
 }
@@ -1259,12 +1265,10 @@ int row = self->HitRow(x, y);
 // 键盘选中，方向键导航随即失效——两者互相打架）
 int hrow = (row >= 0 && row < 3000) ? row : -1;
 bool closeHot = (self->HitHeader(x, y) == 202);
-if (hrow != self->hoverRow_ || closeHot != self->closeHot_) {
-    self->hoverRow_ = hrow;
-    self->closeHot_ = closeHot;
-    self->Draw();
-}
+bool changed = (hrow != self->hoverRow_ || closeHot != self->closeHot_);
+self->closeHot_ = closeHot;
 self->UpdateHover(hrow);
+if (changed) self->Draw();
 return 0;
 }
 case WM_MOUSELEAVE:
