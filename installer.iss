@@ -3,7 +3,7 @@
 ; 输出: installer\LumenBox-Setup-<version>.exe
 
 #define MyAppName "LumenBox"
-#define MyAppVersion "1.0.5"
+#define MyAppVersion "1.0.6"
 #define MyAppPublisher "LumenBox"
 #define MyAppExeName "lumenbox.exe"
 

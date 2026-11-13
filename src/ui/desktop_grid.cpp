@@ -102,6 +102,16 @@ bool DesktopGrid::Init(GraphicsContext& gfx, ComPtr<IDCompositionVisual> root, f
             if (IsTasksBox(boxes_[i])) RedrawBox(i);
         SaveTasks();
     });
+    // 设备重建（Explorer 重启恢复）后，已有盒子的 visual 仍属于已销毁的旧设备/旧 root，
+    // 必须在新设备上重建并挂到新 root，否则新 root 无任何视觉 → 卡片不可见（恢复后只剩托盘）。
+    // 首次启动时 boxes_ 为空，visual 由随后的 SetBoxes 创建，此循环不执行。
+    for (auto& b : boxes_) {
+        b.visual.Reset();
+        if (FAILED(gfx.device->CreateVisual(b.visual.GetAddressOf()))) return false;
+        b.visual->SetOffsetX(0.f);
+        b.visual->SetOffsetY(0.f);
+        root_->AddVisual(b.visual.Get(), TRUE, nullptr);
+    }
     gfx.device->Commit();
     return true;
 }
