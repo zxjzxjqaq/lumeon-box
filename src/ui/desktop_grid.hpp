@@ -47,6 +47,8 @@ public:
     // 从配置注入盒子清单（须在首次 Refresh 前调用）
     void SetBoxes(const std::vector<BoxDef>& defs);
     void SetWindowHandle(HWND hwnd) { hwnd_ = hwnd; }
+    // 跨显示器 DPI 变更：更新缩放因子并重排重绘（scale = dpi/96）
+    void SetDpi(float scale) { dpi_ = scale; Relayout(); for (int i = 0; i < (int)boxes_.size(); ++i) RedrawBox(i); }
     void SetTasksFile(const std::wstring& p) { tasks_file_ = p; }  // 日程格数据文件
     // 当前盒子清单（供宿主持久化）；折叠态含在 BoxDef.collapsed 里
     std::vector<BoxDef> BoxesOut() const;

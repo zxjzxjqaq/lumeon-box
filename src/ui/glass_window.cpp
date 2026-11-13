@@ -104,6 +104,7 @@ LRESULT GlassWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return self->on_hittest_(pt.x / self->dpi_ * 96.f, pt.y / self->dpi_ * 96.f);
         }
         return HTCAPTION;
+    case WM_CAPTURECHANGED:  // 捕获被系统夺走（Alt+Tab/弹窗）→ 转发给网格复位拖动状态
     case WM_MOUSEMOVE:
     case WM_LBUTTONDOWN:
     case WM_LBUTTONUP:
@@ -143,6 +144,16 @@ LRESULT GlassWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_TIMER:
         if (self && self->on_timer_) self->on_timer_(hwnd, static_cast<UINT>(wp));
         return 0;
+    case WM_DPICHANGED: {  // Per-Monitor v2：拖到不同缩放显示器时更新 DPI 并按建议矩形调整窗口
+        if (self) {
+            self->dpi_ = static_cast<float>(HIWORD(wp));
+            const RECT* sr = reinterpret_cast<const RECT*>(lp);
+            SetWindowPos(hwnd, nullptr, sr->left, sr->top, sr->right - sr->left,
+                         sr->bottom - sr->top, SWP_NOZORDER | SWP_NOACTIVATE);
+            if (self->on_dpi_) self->on_dpi_(self->dpi_ / 96.f);
+        }
+        return 0;
+    }
     case WM_INITMENUPOPUP:
     case WM_DRAWITEM:
     case WM_MEASUREITEM:

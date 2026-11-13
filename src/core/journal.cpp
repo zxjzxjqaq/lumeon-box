@@ -21,9 +21,30 @@ void Journal::AppendLine(const std::string& utf8) {
     f << utf8 << '\n';
 }
 
+// 滚动清理：只保留最近 maxLines 行，防止 journal.jsonl 无限增长（设计 §5.3/§8 磁盘预算）
+static void TrimJournal(const std::wstring& path, size_t maxLines) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return;
+    std::vector<std::string> lines;
+    std::string line;
+    while (std::getline(f, line)) lines.push_back(line);
+    f.close();
+    if (lines.size() <= maxLines) return;
+    const size_t drop = lines.size() - maxLines;
+    auto tmp = path + L".tmp";
+    bool ok = false;
+    { std::ofstream o(tmp, std::ios::binary);
+      for (size_t i = drop; i < lines.size(); ++i) o << lines[i] << '\n';
+      o.flush(); ok = o.good(); }
+    std::error_code ec;
+    if (!ok) { std::filesystem::remove(tmp, ec); return; }
+    std::filesystem::rename(tmp, path, ec);
+}
+
 void Journal::BeginBatch() {
     json::json j{{"type", "batch"}, {"ts", ToUtf8(NowStamp())}};
     AppendLine(j.dump());
+    TrimJournal(path_, 800);  // 每批次触发一次滚动清理（低频，开销可忽略）
 }
 
 void Journal::LogMove(const MoveRecord& r) {

@@ -37,6 +37,8 @@ public:
     void OnKeyboard(std::function<bool(UINT msg, UINT wp)> cb) { on_keyboard_ = std::move(cb); }
     // WM_NCHITTEST 委托：返回 HTTRANSPARENT 穿透 / HTCLIENT 交互（贴桌模式必须穿透空白区）
     void OnHitTest(std::function<int(float x, float y)> cb) { on_hittest_ = std::move(cb); }
+    // DPI 变更（拖到不同缩放显示器）：回调缩放因子 scale=dpi/96，宿主据此重缩放网格
+    void OnDpiChanged(std::function<void(float scale)> cb) { on_dpi_ = std::move(cb); }
 
     // 主窗口被外部销毁（父窗口 WorkerW 随 Explorer 重启级联销毁）时回调，
     // 用于重建窗口而非退出进程；返回 true 表示已接管（不退出消息循环）。
@@ -66,6 +68,7 @@ private:
     std::function<LRESULT(UINT, WPARAM, LPARAM)> on_menu_;
     std::function<bool(UINT, UINT)> on_keyboard_;
     std::function<int(float, float)> on_hittest_;
+    std::function<void(float)> on_dpi_;
     float dpi_ = 96.f;
     GraphicsContext gfx_;
 };

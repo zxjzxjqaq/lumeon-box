@@ -23,13 +23,14 @@ public:
         *out = nullptr;
         return E_NOINTERFACE;
     }
-    ULONG STDMETHODCALLTYPE AddRef() override { return ++ref_; }
+    ULONG STDMETHODCALLTYPE AddRef() override { return InterlockedIncrement(&ref_); }
     ULONG STDMETHODCALLTYPE Release() override {
-        if (--ref_ == 0) {
+        LONG r = InterlockedDecrement(&ref_);
+        if (r == 0) {
             delete this;
             return 0;
         }
-        return ref_;
+        return r;
     }
     HRESULT STDMETHODCALLTYPE QueryContinueDrag(BOOL fEscape, DWORD grfKeyState) override {
         if (fEscape) return DRAGDROP_S_CANCEL;
@@ -41,7 +42,7 @@ public:
     }
 
 private:
-    ULONG ref_;
+    LONG ref_;
 };
 
 // 枚举 CF_HDROP：多数 shell 放置目标会先 EnumFormatEtc 确认可用格式，
@@ -58,13 +59,14 @@ public:
         *out = nullptr;
         return E_NOINTERFACE;
     }
-    ULONG STDMETHODCALLTYPE AddRef() override { return ++ref_; }
+    ULONG STDMETHODCALLTYPE AddRef() override { return InterlockedIncrement(&ref_); }
     ULONG STDMETHODCALLTYPE Release() override {
-        if (--ref_ == 0) {
+        LONG r = InterlockedDecrement(&ref_);
+        if (r == 0) {
             delete this;
             return 0;
         }
-        return ref_;
+        return r;
     }
     HRESULT STDMETHODCALLTYPE Next(ULONG celt, FORMATETC* fmt, ULONG* fetched) override {
         if (!fmt) return E_POINTER;
@@ -81,7 +83,7 @@ public:
             index_ = 1;
         }
         if (fetched) *fetched = n;
-        return n > 0 ? S_OK : S_FALSE;  // 必须有 S_FALSE，否则目标会无限枚举
+        return n == celt ? S_OK : S_FALSE;  // 取不足 celt 项须 S_FALSE，否则目标无限枚举
     }
     HRESULT STDMETHODCALLTYPE Skip(ULONG celt) override {
         if (celt == 0) return S_OK;
@@ -96,7 +98,7 @@ public:
     }
 
 private:
-    ULONG ref_ = 1;
+    LONG ref_ = 1;
     ULONG index_ = 0;  // 已枚举项数（0/1），超过即 S_FALSE
 };
 
@@ -113,13 +115,14 @@ public:
         *out = nullptr;
         return E_NOINTERFACE;
     }
-    ULONG STDMETHODCALLTYPE AddRef() override { return ++ref_; }
+    ULONG STDMETHODCALLTYPE AddRef() override { return InterlockedIncrement(&ref_); }
     ULONG STDMETHODCALLTYPE Release() override {
-        if (--ref_ == 0) {
+        LONG r = InterlockedDecrement(&ref_);
+        if (r == 0) {
             delete this;
             return 0;
         }
-        return ref_;
+        return r;
     }
 
     static bool IsHdrop(const FORMATETC* fe) {
@@ -140,14 +143,17 @@ public:
         HGLOBAL h = BuildHdrop();
         if (!h) return E_OUTOFMEMORY;
         SIZE_T bytes = GlobalSize(h);
+        SIZE_T cap = GlobalSize(med->hGlobal);
         void* src = GlobalLock(h);
         void* dst = GlobalLock(med->hGlobal);
-        SIZE_T cap = med->hGlobal ? GlobalSize(med->hGlobal) : 0;
-        if (src && dst) memcpy(dst, src, bytes < cap ? bytes : cap);
+        HRESULT hr = S_OK;
+        if (!src || !dst) hr = E_INVALIDARG;
+        else if (cap < bytes) hr = STG_E_MEDIUMFULL;  // 目标缓冲不足：报错而非静默截断
+        else memcpy(dst, src, bytes);
         if (src) GlobalUnlock(h);
         if (dst) GlobalUnlock(med->hGlobal);
         GlobalFree(h);
-        return S_OK;
+        return hr;
     }
     HRESULT STDMETHODCALLTYPE QueryGetData(FORMATETC* fe) override {
         return IsHdrop(fe) ? S_OK : DV_E_FORMATETC;
@@ -203,7 +209,7 @@ private:
     }
 
     std::wstring path_;
-    ULONG ref_;
+    LONG ref_;
 };
 
 }  // namespace

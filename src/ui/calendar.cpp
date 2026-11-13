@@ -48,7 +48,7 @@ void BuildCard(Gdiplus::GraphicsPath& p, float x, float y, float w, float h, flo
 
 void Calendar::Open(HWND owner, int y, int m, int d, int px, int py) {
     EnsureGdip();
-    scale_ = GetDpiForSystem() / 96.f;  // 按显示 DPI 缩放，避免高分辨率下发虚
+    scale_ = (owner ? GetDpiForWindow(owner) : GetDpiForSystem()) / 96.f;  // 按所在窗口 DPI（Per-Monitor）
     if (!hwnd_) {
         WNDCLASSW wc{};
         wc.lpfnWndProc = &WndProc;
@@ -63,11 +63,12 @@ void Calendar::Open(HWND owner, int y, int m, int d, int px, int py) {
         HRGN rgn = CreateRoundRectRgn(0, 0, w, h, (int)(24 * scale_), (int)(24 * scale_));
         SetWindowRgn(hwnd_, rgn, TRUE);
     }
-    // 夹回工作区
+    // 夹回工作区（用缩放后的物理尺寸，避免高 DPI 下越界）
     RECT work{};
     SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
-    if (px + kW > work.right) px = work.right - kW - 4;
-    if (py + kH > work.bottom) py = work.bottom - kH - 4;
+    int sw = (int)(kW * scale_), sh = (int)(kH * scale_);
+    if (px + sw > work.right) px = work.right - sw - 4;
+    if (py + sh > work.bottom) py = work.bottom - sh - 4;
     if (px < work.left) px = work.left + 4;
     if (py < work.top) py = work.top + 4;
     SetWindowPos(hwnd_, HWND_TOPMOST, px, py, 0, 0,

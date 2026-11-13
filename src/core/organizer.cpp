@@ -46,7 +46,11 @@ bool MovePath(const std::wstring& src, const std::wstring& dst) {
         if (s.root_path() == d.root_path())
             return MoveFileExW(src.c_str(), dst.c_str(), MOVEFILE_COPY_ALLOWED) != 0;
         // 跨卷目录：递归复制 + 删除源（MoveFileEx 跨卷移动目录不支持）
-        if (!CopyTree(s, d)) return false;
+        if (!CopyTree(s, d)) {
+            std::error_code ecc;
+            fs::remove_all(d, ecc);  // 复制失败：清理半份副本，源保持完整（不丢数据）
+            return false;
+        }
         std::error_code ecr;
         fs::remove_all(src, ecr);
         return !ecr;
@@ -134,11 +138,11 @@ bool Organizer::MoveBackToDesktop(const std::wstring& path) {
     std::error_code ec;
     fs::path p(path);
     if (!fs::exists(p, ec)) return false;
-    // 只接受 <container>\<类目>\ 内的文件，防止把任意路径当「放回」用
-    std::wstring root = container_;
+    // 只接受 <container>\<子目录>\ 内的文件，防止把任意路径当「放回」用
+    std::wstring root = container_ + L"\\";  // 带分隔符，避免 LumenBoxFoo 之类前缀误判
     std::wstring parent = p.parent_path().wstring();
-    if (_wcsicmp(parent.substr(0, root.size()).c_str(), root.c_str()) != 0) return false;
-    if (parent.size() <= root.size() + 1) return false;  // LumenBox 根下不放文件
+    if (parent.size() <= root.size()) return false;  // 容器根下不放文件
+    if (_wcsnicmp(parent.c_str(), root.c_str(), root.size()) != 0) return false;
     jr_.BeginBatch();
     std::wstring dst = UniqueTarget((fs::path(desktop_) / p.filename()).wstring());
     if (!MovePath(p.wstring(), dst)) return false;
@@ -182,9 +186,26 @@ bool Organizer::MoveToFolder(const std::wstring& path, const std::wstring& folde
     fs::create_directories(dir, ec);
     std::wstring dst = UniqueTarget(dir + L"\\" + fs::path(path).filename().wstring());
     if (!MovePath(path, dst)) return false;
+    jr_.BeginBatch();  // 拖入也要成批，否则日志无批次头 → 无法撤销
     jr_.LogMove({path, dst});
     NotifyShellMove(path, dst);
     return true;
+}
+
+bool Organizer::CopyToFolder(const std::wstring& path, const std::wstring& folder) {
+    std::error_code ec;
+    if (!fs::exists(path, ec)) return false;
+    std::wstring dir = FolderDir(folder);
+    fs::create_directories(dir, ec);
+    std::wstring dst = UniqueTarget(dir + L"\\" + fs::path(path).filename().wstring());
+    if (fs::is_directory(path, ec)) {
+        if (!CopyTree(fs::path(path), fs::path(dst))) return false;
+    } else {
+        fs::copy_file(path, dst, fs::copy_options::overwrite_existing, ec);
+        if (ec) return false;
+    }
+    NotifyShellMove(path, dst);
+    return true;  // 复制不写移动日志（撤销不覆盖复制操作）
 }
 
 std::wstring Organizer::MakeFolder(const std::wstring& base) {
@@ -200,13 +221,15 @@ bool Organizer::UndoLast() {
     auto batches = jr_.Batches();
     if (batches.empty()) return false;
     const auto& last = batches.back();
+    bool allOk = true;
     for (auto it = last.rbegin(); it != last.rend(); ++it) {
         std::error_code ec;
+        if (!fs::exists(it->dst, ec)) { allOk = false; continue; }  // 目标已被删/移走 → 无法还原
         // 原位被占 → 放回为唯一名（永不覆盖）
         std::wstring src = fs::exists(it->src, ec) ? UniqueTarget(it->src) : it->src;
-        MovePath(it->dst, src);
+        if (!MovePath(it->dst, src)) allOk = false;
     }
-    return jr_.RemoveLastBatch();
+    return jr_.RemoveLastBatch() && allOk;
 }
 
 }  // namespace lb

@@ -120,10 +120,12 @@ TEST_CASE("拖拽归位：命中盒子才移动并回报箱子", "[drop]") {
     DropTarget dt;
     dt.SetHooks(
         [](const POINTL& pt) { return (pt.x < 100 && pt.y < 100) ? 3 : -1; },
-        [&](const std::vector<std::wstring>& files, int box) {
+        [&](const std::vector<std::wstring>& files, int box, DWORD effect) {
             for (auto& f : files) {
                 if (box < 0) {
                     if (org.MoveBackToDesktop(f)) got.push_back(f);
+                } else if (effect & DROPEFFECT_COPY) {
+                    if (org.CopyToFolder(f, L"box_b3")) got.push_back(f);
                 } else if (org.MoveToFolder(f, L"box_b3")) {
                     got.push_back(f);
                 }
@@ -187,13 +189,26 @@ TEST_CASE("拖拽归位：命中盒子才移动并回报箱子", "[drop]") {
         REQUIRE(fs::exists(d.dir / L"LumenBox" / L"box_b3" / L"song.mp3"));
         REQUIRE(fs::exists(d.dir / L"LumenBox" / L"box_b3" / L"pic.jpg"));
     }
+
+    SECTION("Ctrl 拖拽 = 复制（保留源文件）") {
+        HANDLE h = MakeHdrop({(d.dir / L"song.mp3").wstring()});
+        StubDataObject obj(h);
+        POINTL pt{50, 50};
+        DWORD eff = DROPEFFECT_MOVE | DROPEFFECT_COPY;  // 源允许移动+复制
+        REQUIRE(dt.DragEnter(&obj, MK_CONTROL, pt, &eff) == S_OK);
+        REQUIRE(eff == DROPEFFECT_COPY);
+        REQUIRE(dt.Drop(&obj, MK_CONTROL, pt, &eff) == S_OK);
+        REQUIRE(eff == DROPEFFECT_COPY);
+        REQUIRE(fs::exists(d.dir / L"song.mp3"));                            // 源保留
+        REQUIRE(fs::exists(d.dir / L"LumenBox" / L"box_b3" / L"song.mp3"));  // 副本入盒
+    }
 }
 
 TEST_CASE("DragLeave 清除高亮，引用计数自管", "[drop]") {
     DropTarget dt;
     int lastDragBox = -99;
     dt.SetHooks([](const POINTL&) { return 1; },
-                [](const std::vector<std::wstring>&, int) {},
+                [](const std::vector<std::wstring>&, int, DWORD) {},
                 [&](int b) { lastDragBox = b; });
     HANDLE h = MakeHdrop({L"C:\\a.txt"});
     StubDataObject obj(h);

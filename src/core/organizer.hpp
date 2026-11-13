@@ -36,6 +36,7 @@ public:
     std::wstring FolderDir(const std::wstring& folder) const;              // 容器\folder
     std::vector<std::wstring> FilesInFolder(const std::wstring& folder) const;
     bool MoveToFolder(const std::wstring& path, const std::wstring& folder);
+    bool CopyToFolder(const std::wstring& path, const std::wstring& folder);  // Ctrl 拖拽=复制（保留源）
     // 在容器内新建一个不冲突的盒子子目录（base 如 box_b1，同名自动加序号）
     std::wstring MakeFolder(const std::wstring& base);
 

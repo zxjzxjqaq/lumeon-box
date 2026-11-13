@@ -5,8 +5,18 @@
 
 namespace lb {
 
+// 由手势与源允许效果计算放置效果：Ctrl=复制、Shift/默认=移动（收纳语义）；与源允许取交集。
+// 源未限定（allowed=0，如单测桩）视为移动/复制皆可。
+static DWORD DesiredEffect(DWORD keys, DWORD allowed) {
+    if (!allowed) allowed = DROPEFFECT_MOVE | DROPEFFECT_COPY;
+    DWORD want = (keys & MK_CONTROL) ? DROPEFFECT_COPY : DROPEFFECT_MOVE;
+    DWORD r = want & allowed;
+    if (!r) r = allowed & (DROPEFFECT_MOVE | DROPEFFECT_COPY);
+    return r ? r : DROPEFFECT_NONE;
+}
+
 void DropTarget::SetHooks(std::function<int(const POINTL&)> boxAtScreen,
-                          std::function<void(const std::vector<std::wstring>&, int)> onFiles,
+                          std::function<void(const std::vector<std::wstring>&, int, DWORD)> onFiles,
                           std::function<void(int)> onDragBox) {
     box_at_ = std::move(boxAtScreen);
     on_files_ = std::move(onFiles);
@@ -55,7 +65,7 @@ ULONG STDMETHODCALLTYPE DropTarget::Release() {
     return --ref_;
 }
 
-HRESULT STDMETHODCALLTYPE DropTarget::DragEnter(IDataObject* obj, DWORD, POINTL pt,
+HRESULT STDMETHODCALLTYPE DropTarget::DragEnter(IDataObject* obj, DWORD grfKeyState, POINTL pt,
                                                 DWORD* effect) {
     if (!effect) return E_POINTER;
     dragging_ = HasFiles(obj) ? obj : nullptr;
@@ -66,18 +76,18 @@ HRESULT STDMETHODCALLTYPE DropTarget::DragEnter(IDataObject* obj, DWORD, POINTL 
     }
     obj->AddRef();  // 拖拽期间保活
     UpdateDragBox(box_at_ ? box_at_(pt) : -1);
-    *effect = DROPEFFECT_MOVE;  // 整窗可放置：卡片=进格，非卡片=放回桌面
+    *effect = DesiredEffect(grfKeyState, *effect);  // 整窗可放置；尊重 Ctrl=复制手势
     return S_OK;
 }
 
-HRESULT STDMETHODCALLTYPE DropTarget::DragOver(DWORD, POINTL pt, DWORD* effect) {
+HRESULT STDMETHODCALLTYPE DropTarget::DragOver(DWORD grfKeyState, POINTL pt, DWORD* effect) {
     if (!effect) return E_POINTER;
     if (!dragging_) {
         *effect = DROPEFFECT_NONE;
         return S_OK;
     }
     UpdateDragBox(box_at_ ? box_at_(pt) : -1);
-    *effect = DROPEFFECT_MOVE;
+    *effect = DesiredEffect(grfKeyState, *effect);
     return S_OK;
 }
 
@@ -90,7 +100,8 @@ HRESULT STDMETHODCALLTYPE DropTarget::DragLeave() {
     return S_OK;
 }
 
-HRESULT STDMETHODCALLTYPE DropTarget::Drop(IDataObject* obj, DWORD, POINTL pt, DWORD* effect) {
+HRESULT STDMETHODCALLTYPE DropTarget::Drop(IDataObject* obj, DWORD grfKeyState, POINTL pt,
+                                           DWORD* effect) {
     if (!effect) return E_POINTER;
     if (!dragging_ || !HasFiles(obj)) {
         *effect = DROPEFFECT_NONE;
@@ -99,13 +110,14 @@ HRESULT STDMETHODCALLTYPE DropTarget::Drop(IDataObject* obj, DWORD, POINTL pt, D
     }
     int box = box_at_ ? box_at_(pt) : -1;
     UpdateDragBox(-1);
+    const DWORD eff = DesiredEffect(grfKeyState, *effect);
     if (on_files_) {
         FORMATETC f{CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
         STGMEDIUM med{};
         if (obj->GetData(&f, &med) == S_OK) {
             auto files = FilesFromHdrop(med.hGlobal);
-            // box>=0 进该盒；-1 非卡片区 → 放回桌面（宿主决定）
-            on_files_(files, box);
+            // box>=0 进该盒；-1 非卡片区 → 放回桌面（宿主决定）；eff 区分复制/移动
+            on_files_(files, box, eff);
             if (med.pUnkForRelease)
                 med.pUnkForRelease->Release();
             else
@@ -114,7 +126,7 @@ HRESULT STDMETHODCALLTYPE DropTarget::Drop(IDataObject* obj, DWORD, POINTL pt, D
     }
     dragging_->Release();
     dragging_ = nullptr;
-    *effect = DROPEFFECT_MOVE;
+    *effect = eff;
     return S_OK;
 }
 

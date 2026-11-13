@@ -70,6 +70,7 @@ bool DesktopGrid::Init(GraphicsContext& gfx, ComPtr<IDCompositionVisual> root, f
     root_ = root;
     dpi_ = dpi;
     hwnd_ = nullptr;
+    icons_.Clear();  // 设备可能已重建（Explorer 重启）：清空旧设备位图，避免复用失效/报错
 
     if (FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
                                    reinterpret_cast<IUnknown**>(dwrite_.GetAddressOf()))))
@@ -262,6 +263,11 @@ void DesktopGrid::RemoveBox(int i) {
     fix(collapse_pending_);
     fix(scrollbar_box_);
     fix(task_edit_box_);
+    // 正在改名的盒被删 → 取消改名态，避免后续失焦提交读到越界下标
+    if (renaming_ && rename_box_ < 0) {
+        renaming_ = false;
+        if (hwnd_) KillTimer(hwnd_, kCaretTimer);
+    }
     Relayout();
     if (on_boxes_changed_) on_boxes_changed_();
 }
@@ -587,8 +593,11 @@ void DesktopGrid::SaveTasks() {
     j["tasks"] = std::move(tj);
     std::error_code ec;
     std::filesystem::create_directories(std::filesystem::path(tasks_file_).parent_path(), ec);
-    std::ofstream f(tasks_file_, std::ios::binary);
-    f << j.dump(2);
+    auto tmp = tasks_file_ + L".tmp";
+    bool ok = false;
+    { std::ofstream f(tmp, std::ios::binary); f << j.dump(2); f.flush(); ok = f.good(); }
+    if (!ok) { std::filesystem::remove(tmp, ec); return; }  // 写失败不覆盖正常 tasks.json
+    std::filesystem::rename(tmp, tasks_file_, ec);  // 原子替换：崩溃中途不丢全部待办
 }
 
 void DesktopGrid::StartTaskEdit(int boxIdx, int rowIdx) {
@@ -953,8 +962,16 @@ void DesktopGrid::HeaderMenu(HWND hwnd, int boxIdx) {
         if (MessageBoxW(hwnd, msg.c_str(), L"LumenBox", MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) !=
             IDYES)
             break;
-        if (!boxes_[boxIdx].folder.empty() && org_)
+        if (!boxes_[boxIdx].folder.empty() && org_) {
             for (auto& p : org_->FilesInFolder(boxes_[boxIdx].folder)) org_->MoveBackToDesktop(p);
+            // 仍有文件没放回（被占用/移动失败）→ 保留容器，避免留下无 UI 引用的隐形孤儿
+            if (!org_->FilesInFolder(boxes_[boxIdx].folder).empty()) {
+                MessageBoxW(hwnd, L"部分文件正被占用或移动失败，已保留容器。请关闭占用程序后重试。",
+                            L"LumenBox", MB_OK | MB_ICONWARNING);
+                Refresh();
+                break;
+            }
+        }
         RemoveBox(boxIdx);
         Refresh();
         break;
@@ -987,13 +1004,15 @@ float DesktopGrid::RowTextWidth(const std::wstring& s) const {
 std::wstring DesktopGrid::EllipsizeW(const std::wstring& s, float maxW) const {
     if (s.empty()) return s;
     if (RowTextWidth(s) <= maxW) return s;
-    std::wstring tail = L"\u2026";  // …
-    size_t n = s.size();
-    while (n > 0) {
-        std::wstring cut = s.substr(0, --n) + tail;
-        if (RowTextWidth(cut) <= maxW) return cut;
+    const std::wstring tail = L"\u2026";  // …
+    // 二分查找最长可容纳前缀：O(log n) 次 DWrite 测宽，取代逐字符 O(n)（长中文名每行数百次布局）
+    size_t lo = 0, hi = s.size();
+    while (lo < hi) {
+        size_t mid = (lo + hi + 1) / 2;
+        if (RowTextWidth(s.substr(0, mid) + tail) <= maxW) lo = mid;
+        else hi = mid - 1;
     }
-    return tail;
+    return lo > 0 ? s.substr(0, lo) + tail : tail;
 }
 
 void DesktopGrid::StartRename(int boxIdx) {
@@ -1017,6 +1036,7 @@ void DesktopGrid::CommitRename() {
     int boxIdx = rename_box_;
     renaming_ = false;
     if (hwnd_) KillTimer(hwnd_, kCaretTimer);
+    if (boxIdx < 0 || boxIdx >= (int)boxes_.size()) return;  // 盒已被删/越界：放弃提交，防 OOB
     std::wstring name = rename_buf_;
     if (!name.empty() && name != boxes_[boxIdx].name) {
         boxes_[boxIdx].name = name;
@@ -1030,6 +1050,7 @@ void DesktopGrid::CancelRename() {
     int boxIdx = rename_box_;
     renaming_ = false;
     if (hwnd_) KillTimer(hwnd_, kCaretTimer);
+    if (boxIdx < 0 || boxIdx >= (int)boxes_.size()) return;
     RedrawBox(boxIdx);
 }
 
@@ -1505,7 +1526,7 @@ void DesktopGrid::OnTimer(HWND hwnd, UINT id) {
         }
         return;
     }
-    if (id < kTimerBase || id >= kTimerBase + boxes_.size()) return;
+    if (id < kTimerBase || id >= kTimerBase + boxes_.size()) { KillTimer(hwnd, id); return; }
     KillTimer(hwnd, id);
     Box& b = boxes_[id - kTimerBase];
 

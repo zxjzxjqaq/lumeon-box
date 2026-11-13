@@ -124,7 +124,9 @@ void WriteFileAtomic(const std::wstring& path, const std::string& bytes) {
     std::error_code ec;
     fs::create_directories(fs::path(path).parent_path(), ec);
     auto tmp = path + L".tmp";
-    { std::ofstream f(tmp, std::ios::binary); f << bytes; }
+    bool ok = false;
+    { std::ofstream f(tmp, std::ios::binary); f << bytes; f.flush(); ok = f.good(); }
+    if (!ok) { fs::remove(tmp, ec); return; }  // 写失败（磁盘满等）不覆盖正常文件，避免静默数据丢失
     fs::rename(tmp, path, ec);
 }
 }  // namespace
@@ -289,7 +291,9 @@ bool ClipStore::SaveLocked() const {
     std::error_code ec;
     fs::create_directories(dir_, ec);
     auto tmp = dir_ + L"\\index.jsonl.tmp";
-    { std::ofstream f(tmp, std::ios::binary); f << out; }
+    bool ok = false;
+    { std::ofstream f(tmp, std::ios::binary); f << out; f.flush(); ok = f.good(); }
+    if (!ok) { fs::remove(tmp, ec); return false; }  // 写失败不覆盖正常索引
     fs::rename(tmp, dir_ + L"\\index.jsonl", ec);  // Windows 上原子替换
     return !ec;
 }

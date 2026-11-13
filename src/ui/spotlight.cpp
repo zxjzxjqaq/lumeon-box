@@ -288,7 +288,7 @@ LRESULT CALLBACK Spotlight::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         int y = (int)(GET_Y_LPARAM(lp) / s);
         if (y >= kHeaderH) {
             int row = (y - kHeaderH) / kRowH;
-            if (row >= 0 && row < (int)self->hits_.size() && row != self->sel_) {
+            if (row >= 0 && row < kMaxRows && row < (int)self->hits_.size() && row != self->sel_) {
                 self->sel_ = row;
                 self->Draw();
             }
@@ -305,7 +305,7 @@ LRESULT CALLBACK Spotlight::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         // 单击结果行 → 打开
         if (y >= kHeaderH) {
             int row = (y - kHeaderH) / kRowH;
-            if (row >= 0 && row < (int)self->hits_.size()) self->Launch(row);
+            if (row >= 0 && row < kMaxRows && row < (int)self->hits_.size()) self->Launch(row);
         }
         return 0;
     }

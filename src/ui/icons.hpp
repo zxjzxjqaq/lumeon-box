@@ -11,6 +11,8 @@ namespace lb {
 class IconCache {
 public:
     ID2D1Bitmap* Get(ID2D1DeviceContext* ctx, const std::wstring& path);
+    // 设备重建（Explorer 重启）后必须清空：缓存位图属于已销毁的旧 D2D 设备，复用会失效/报错
+    void Clear() { cache_.clear(); }
 
 private:
     std::map<std::wstring, ComPtr<ID2D1Bitmap>> cache_;

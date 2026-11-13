@@ -9,8 +9,8 @@ namespace fs = std::filesystem;
 
 static std::wstring CacheKey(const std::wstring& path) {
     std::wstring ext = LowerExt(fs::path(path).filename().wstring());
-    if (ext == L"exe" || ext == L"msi" || ext == L"lnk")  // 每文件图标
-        return L"@" + LowerExt(path);
+    if (ext == L"exe" || ext == L"msi" || ext == L"lnk")  // 每文件独立图标
+        return L"@" + ext + L":" + path;  // 全路径作唯一键，避免所有 exe/lnk 共用第一个图标
     return ext;
 }
 
@@ -76,6 +76,14 @@ ID2D1Bitmap* IconCache::Get(ID2D1DeviceContext* ctx, const std::wstring& path) {
     }
     ID2D1Bitmap* raw = bmp.Get();
     cache_[std::move(key)] = std::move(bmp);  // 失败也缓存 nullptr 避免反复重试
+    // 上限淘汰：per-file 键（exe/lnk）会随文件数增长，防止内存无界（设计「极低占用」）
+    if (cache_.size() > 512) {
+        size_t drop = cache_.size() - 256;
+        for (auto it = cache_.begin(); it != cache_.end() && drop > 0;) {
+            it = cache_.erase(it);
+            --drop;
+        }
+    }
     return raw;
 }
 

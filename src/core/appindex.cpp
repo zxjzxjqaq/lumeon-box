@@ -76,8 +76,9 @@ void AppIndex::Build() {
         for (DWORD i = 0;; ++i) {
             wchar_t name[256]{};
             DWORD nlen = 256;
-            if (RegEnumKeyW(hk, i, name, nlen) == ERROR_NO_MORE_ITEMS) break;
-            if (RegEnumKeyW(hk, i, name, nlen) != ERROR_SUCCESS) continue;
+            LONG ek = RegEnumKeyW(hk, i, name, nlen);
+            if (ek == ERROR_NO_MORE_ITEMS) break;
+            if (ek != ERROR_SUCCESS) continue;
             HKEY sk = nullptr;
             std::wstring sub = std::wstring(base) + L"\\" + name;
             if (RegOpenKeyExW(hive, sub.c_str(), 0, KEY_READ, &sk) != ERROR_SUCCESS) continue;

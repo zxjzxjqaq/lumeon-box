@@ -122,8 +122,7 @@ bool ScalePngThumb(const std::string& png, std::string& thumb) {
     if (!hg) return false;
     {
         auto* p = GlobalLock(hg);
-        memcpy(p, png.data(), png.size());
-        GlobalUnlock(hg);
+        if (p) { memcpy(p, png.data(), png.size()); GlobalUnlock(hg); }  // 锁失败跳过，下游解码优雅失败
     }
     ComPtr<IStream> stream;
     bool ok = false;
@@ -366,12 +365,13 @@ void ClipboardMonitor::OnClipboardUpdate() {
     if (seq == 0 || seq == lastSeq_) return;
 
     // 打开争用：重试 ≤5 × 10ms（设计文档 §5.1）
+    // 不在 UI 线程 Sleep 阻塞（会卡界面与他进程复制）；最多 3 次即时重试，失败即跳过待下次变更
     bool opened = false;
-    for (int i = 0; i < 5 && !opened; ++i) {
-        opened = OpenClipboard(hwnd_) != FALSE;
-        if (!opened) Sleep(10);
-    }
+    for (int i = 0; i < 3 && !opened; ++i) opened = OpenClipboard(hwnd_) != FALSE;
     if (!opened) return;  // 下次内容变化会再来
+    // 异常安全守卫：开剪贴板后若抛异常（如 32MB DIB bad_alloc）保证关闭，
+    // 否则剪贴板被本进程长期占用 → 全系统复制粘贴锁死。正常路径仍提前显式关闭以缩短持锁。
+    struct ClipGuard { ~ClipGuard() { CloseClipboard(); } } clipGuard;
 
     // 临时诊断：枚举剪贴板全部格式名（定位微信混合复制的图片来源）
     {
@@ -445,11 +445,8 @@ void ClipboardMonitor::OnClipboardUpdate() {
     std::string primaryBytes;  // 哈希用：按展示优先级取第一个可用载荷
     if (hasDrop) {
         // OLE 剪贴板的 HDROP 可能是延迟渲染：取不到时短暂重试，给源进程渲染时间
-        HANDLE h = nullptr;
-        for (int i = 0; i < 4 && !h; ++i) {
-            h = GetClipboardData(CF_HDROP);
-            if (!h) Sleep(40);
-        }
+        // GetClipboardData 已同步触发源进程延迟渲染，无需 Sleep 重试（避免阻塞 UI 线程）
+        HANDLE h = GetClipboardData(CF_HDROP);
         SIZE_T n = h ? GlobalSize(h) : 0;
         auto* p = h ? static_cast<const void*>(GlobalLock(h)) : nullptr;
         if (p) {
@@ -565,6 +562,27 @@ void ClipboardMonitor::OnClipboardUpdate() {
         }
     }
 
+    // 关闭剪贴板前捕获微信/QQ 富文本与 json 原始字节：GetClipboardData 必须在开剪贴板时调用，
+    // 关闭后再读恒为 NULL（原 bug：输入框配图还原 / json 存档整段失效）。
+    // 耗时的本地文件读取/base64 解码放到关闭之后，尽量缩短持锁时间。
+    std::vector<std::pair<UINT, std::string>> richEditCaptured;
+    for (const wchar_t* rn : {L"WeChat_RichEdit_Format", L"QQ_Unicode_RichEdit_Format"}) {
+        UINT f = RegisterClipboardFormatW(rn);
+        if (f && IsClipboardFormatAvailable(f)) {
+            std::string tmp;
+            if (readData(f, tmp) && !tmp.empty()) richEditCaptured.emplace_back(f, std::move(tmp));
+        }
+    }
+    std::string wxJsonRaw;
+    {
+        UINT f = RegisterClipboardFormatW(L"json");
+        if (f && IsClipboardFormatAvailable(f)) {
+            std::string tmp;
+            if (readData(f, tmp) && !tmp.empty() && tmp.size() <= 64 * 1024)
+                wxJsonRaw = std::move(tmp);
+        }
+    }
+
     CloseClipboard();
     lastSeq_ = seq;
 
@@ -593,6 +611,7 @@ void ClipboardMonitor::OnClipboardUpdate() {
                     std::string bytes = Base64Decode(html.data() + d0, d1 - d0);
                     int w = 0, h = 0;
                     if (bytes.size() >= 100 && PngSize(bytes, w, h) &&
+                        w <= opts_.imgMaxPixels && h <= opts_.imgMaxPixels &&
                         (uint64_t)w * h * 4 <= opts_.imgMaxBytes) {
                         ClipPayload pl;
                         pl.fmt = "png";
@@ -642,11 +661,9 @@ void ClipboardMonitor::OnClipboardUpdate() {
     // <EditElement type="1" filepath="...png"> 引用，文字在 CDATA。
     // 读引用文件转 png 载荷（与聊天片段 base64 提取同管线），文字保留回写。
     if (type == "html") {
-        for (const wchar_t* rn : {L"WeChat_RichEdit_Format", L"QQ_Unicode_RichEdit_Format"}) {
-            UINT fmtRe = RegisterClipboardFormatW(rn);
-            if (!fmtRe || !IsClipboardFormatAvailable(fmtRe)) continue;
-            std::string re;
-            if (!readData(fmtRe, re) || re.empty()) continue;
+        for (auto& cap : richEditCaptured) {
+            const std::string& re = cap.second;
+            if (re.empty()) continue;
             int nimg = 0;
             size_t p = re.find("filepath=\"");
             while (p != std::string::npos && nimg < 6) {
@@ -716,16 +733,12 @@ void ClipboardMonitor::OnClipboardUpdate() {
     // 微信私有 "json" 格式存档：混合复制（图片+文字消息）时微信把消息结构/
     // 资源引用放此格式（图片本体不进剪贴板；粘贴回微信由微信按引用还原）。
     // 仅存档诊断/供后续解析图片引用，不参与展示与回写。
-    UINT fmtWxJson = RegisterClipboardFormatW(L"json");
-    if (fmtWxJson && IsClipboardFormatAvailable(fmtWxJson)) {
-        std::string raw;
-        if (readData(fmtWxJson, raw) && !raw.empty() && raw.size() <= 64 * 1024) {
-            ClipPayload pl;
-            pl.fmt = "json";
-            pl.size = raw.size();
-            pl.text = std::move(raw);
-            job.entry.payloads.push_back(std::move(pl));
-        }
+    if (!wxJsonRaw.empty()) {
+        ClipPayload pl;
+        pl.fmt = "json";
+        pl.size = wxJsonRaw.size();
+        pl.text = std::move(wxJsonRaw);
+        job.entry.payloads.push_back(std::move(pl));
     }
 
     job.entry.ts = std::time(nullptr);
@@ -775,6 +788,7 @@ void ClipboardMonitor::OnClipboardUpdate() {
 
     {
         std::lock_guard<std::mutex> lk(qmu_);
+        while (queue_.size() >= 64) queue_.pop_front();  // 队列上限：快速复制大图防积压数百 MB（丢最旧保最新）
         queue_.push_back(std::move(job));
     }
     qcv_.notify_one();
@@ -926,8 +940,13 @@ bool CopyClipToClipboard(
             !bytes.empty()) {
             bool w = setFmt(fmtHtml, bytes);
             ok = ok || w;
-            if (!textWritten && !e.text.empty())
-                setFmt(CF_UNICODETEXT, WideBytes(e.text));
+            if (!textWritten) {
+                std::string txt;
+                if (loader("text", txt) && !txt.empty())
+                    setFmt(CF_UNICODETEXT, WideBytes(ToWide(txt)));  // 完整文本，而非 120 字预览
+                else if (!e.text.empty())
+                    setFmt(CF_UNICODETEXT, WideBytes(e.text));
+            }
             break;
         }
     }
@@ -967,8 +986,7 @@ bool CopyClipToClipboard(
                 if (hg) {
                     {
                         auto* p = GlobalLock(hg);
-                        memcpy(p, bytes.data(), bytes.size());
-                        GlobalUnlock(hg);
+                        if (p) { memcpy(p, bytes.data(), bytes.size()); GlobalUnlock(hg); }  // 锁失败跳过
                     }
                     ComPtr<IStream> stream;
                     ComPtr<IWICBitmapDecoder> dec;

@@ -16,7 +16,7 @@ public:
     // boxAtScreen: 屏幕坐标 → 盒子下标（-1 非卡片）；onFiles: 归位执行（box=-1→放回
     // 桌面根；box>=0→宿主决定进哪个容器；待办盒由宿主忽略）；onDragBox: 悬停盒变化高亮
     void SetHooks(std::function<int(const POINTL&)> boxAtScreen,
-                  std::function<void(const std::vector<std::wstring>&, int box)> onFiles,
+                  std::function<void(const std::vector<std::wstring>&, int box, DWORD effect)> onFiles,
                   std::function<void(int)> onDragBox);
     void SetWindow(HWND hwnd) { hwnd_ = hwnd; }
 
@@ -44,7 +44,7 @@ private:
     int drag_box_ = -1;
     HWND hwnd_ = nullptr;
     std::function<int(const POINTL&)> box_at_;
-    std::function<void(const std::vector<std::wstring>&, int)> on_files_;
+    std::function<void(const std::vector<std::wstring>&, int, DWORD)> on_files_;
     std::function<void(int)> on_drag_box_;
 };
 

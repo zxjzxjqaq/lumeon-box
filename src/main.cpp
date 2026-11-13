@@ -330,6 +330,7 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
         (void)x; (void)y;
         return HTCLIENT;
     });
+    win.OnDpiChanged([&](float scale) { grid.SetDpi(scale); });  // 跨显示器 DPI 变更 → 网格重缩放
 
     grid.SetOrg(&org);
     grid.SetTasksFile(appData + L"\\tasks.json");  // 日程格数据（待办盒）— 须在 Init 前，Init 内部 LoadTasks
@@ -394,14 +395,17 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
             // 客户端像素 → DIP（与 OnMouse 的 x/dpi*96 同空间）；勿再乘 96
             return grid.BoxAt(c.x / win.DpiScale(), c.y / win.DpiScale());
         },
-        [&](const std::vector<std::wstring>& files, int box) {
+        [&](const std::vector<std::wstring>& files, int box, DWORD effect) {
             if (box >= 0 && grid.IsTasksAt(box)) {  // 待办盒：不接受文件拖入
                 grid.Refresh();
                 return;
             }
+            const bool copy = (effect & DROPEFFECT_COPY) != 0;  // Ctrl 拖拽=复制（保留源）
             for (auto& f : files) {
                 if (box < 0)  // 落在非卡片区 = 放回桌面
                     org.MoveBackToDesktop(f);
+                else if (copy)
+                    org.CopyToFolder(f, grid.FolderAt(box));
                 else
                     org.MoveToFolder(f, grid.FolderAt(box));
             }
@@ -472,6 +476,10 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
             RegisterHotKey(h, 5, MOD_CONTROL | MOD_ALT, 'B');
         if (cfg.hideIconsMode != "hook") RegisterHotKey(h, 3, MOD_CONTROL | MOD_ALT, 'H');
         clipMon.SetNotifyWindow(h);
+        // boxWatcher 原指向已销毁的旧窗口：重启监听挂到新 HWND，
+        // 否则 Explorer 重启后「容器外部改动/回收站还原实时刷新」静默失效。
+        boxWatcher.Stop();
+        boxWatcher.Start(appData, h, boxWatcherMsg, /*recursive*/ true);
         dropTarget.SetWindow(h);
         RegisterDragDrop(h, &dropTarget);
         grid.SetWindowHandle(h);
@@ -497,7 +505,11 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
             return 0;
         }
         if (msg == WM_APP + 7) {  // 图片超限被拒（一次性气泡，不阻塞）
-            tray.Balloon(L"剪贴板历史", L"有图片过大未被记录（超过 8K 像素或 32MB 限制）。");
+            static bool warned = false;
+            if (!warned) {
+                warned = true;
+                tray.Balloon(L"剪贴板历史", L"有图片过大未被记录（超过 8K 像素或 32MB 限制）。");
+            }
             return 0;
         }
         if (msg == WM_APP + 3) {  // 双击桌面空白 → 切换图标显隐（钩子路径）

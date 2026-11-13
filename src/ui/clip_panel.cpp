@@ -141,6 +141,7 @@ WNDCLASSW wc{};
 wc.lpfnWndProc = &WndProc;
 wc.hInstance = GetModuleHandleW(nullptr);
 wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+wc.style = CS_DBLCLKS;  // 否则 WM_LBUTTONDBLCLK 永不触发（双击复制为死代码）
 wc.lpszClassName = L"LumenBoxClipPanel";
 RegisterClassW(&wc);
 scale_ = GetDpiForSystem() / 96.f;
@@ -1230,12 +1231,9 @@ moveSel(-1);
 } else if (wp == VK_DOWN) {
 moveSel(1);
 } else if (wp == VK_PRIOR) {
-self->scroll_ -= self->VisibleCount();
-self->scroll_ = std::max(0, self->scroll_);
-moveSel(0);
+moveSel(-self->VisibleCount());  // 翻页同步移动选中项（原 scroll 先跳再被 moveSel(0) 重置回去 → 翻页无效）
 } else if (wp == VK_NEXT) {
-self->scroll_ += self->VisibleCount();
-moveSel(0);
+moveSel(self->VisibleCount());
 } else if (wp == VK_DELETE) {
 if (self->sel_ >= 0 && self->sel_ < (int)self->rows_.size() && self->store_) {
 self->store_->Remove(self->items_[self->rows_[self->sel_]].id);
@@ -1373,6 +1371,9 @@ KillTimer(hwnd, 1);
 moveSel(0);
 return 0;
 }
+case WM_ACTIVATE:
+if (LOWORD(wp) == WA_INACTIVE) self->OnClose();  // 失焦自动关闭（预览/提示窗均 NOACTIVATE，不会误触发）
+return 0;
 case WM_CLOSE:
 self->OnClose();
 return 0;

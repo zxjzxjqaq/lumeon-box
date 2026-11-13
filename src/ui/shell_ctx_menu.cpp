@@ -1,5 +1,6 @@
 #include "ui/shell_ctx_menu.hpp"
 #include <shellapi.h>
+#include <shlobj.h>
 #include <shobjidl.h>
 #include <cwchar>
 #pragma comment(lib, "shell32")
@@ -15,12 +16,14 @@ bool ShellCtxMenu::Build(HWND hwnd, const std::wstring& path) {
     ComPtr<IShellFolder> parent;
     PCUITEMID_CHILD child = nullptr;
     HRESULT hr = SHBindToParent(pidl, IID_PPV_ARGS(&parent), &child);
-    CoTaskMemFree(pidl);
-    if (FAILED(hr)) return false;
+    if (FAILED(hr)) { CoTaskMemFree(pidl); return false; }
 
     ComPtr<IContextMenu> cm;
     hr = parent->GetUIObjectOf(hwnd, 1, &child, IID_IContextMenu, nullptr,
                                reinterpret_cast<void**>(cm.GetAddressOf()));
+    // child 指向 pidl 内部的最后一个 SHITEMID，必须在 GetUIObjectOf 用完之后再释放，
+    // 否则 GetUIObjectOf 读取已释放内存（use-after-free）→ 堆损坏/崩溃。
+    CoTaskMemFree(pidl);
     if (FAILED(hr) || !cm) return false;
     cm.As(&cm2_);
     cm.As(&cm3_);
@@ -95,8 +98,9 @@ int ShellCtxMenu::Show(HWND hwnd, int x, int y) {
     info.lpVerb = MAKEINTRESOURCEA(off);
     info.lpVerbW = MAKEINTRESOURCEW(off);
     info.nShow = SW_SHOWNORMAL;
-    cm1_->InvokeCommand(reinterpret_cast<LPCMINVOKECOMMANDINFO>(&info));
-    return is_desktop_ ? -1 : kShellDone;
+    HRESULT ihr = cm1_->InvokeCommand(reinterpret_cast<LPCMINVOKECOMMANDINFO>(&info));
+    if (is_desktop_) return -1;
+    return SUCCEEDED(ihr) ? kShellDone : -1;  // 失败不回报「已完成」，避免宿主无谓刷新
 }
 
 LRESULT ShellCtxMenu::HandleMsg(UINT msg, WPARAM wp, LPARAM lp) {
@@ -117,15 +121,19 @@ void ShellCtxMenu::Reset() {
 }
 
 bool ShellCtxMenu::RecycleToBin(HWND hwnd, const std::wstring& path) {
-    std::wstring buf = path;
-    buf.push_back(L'\0');
-    buf.push_back(L'\0');  // 双空结尾路径列表
-    SHFILEOPSTRUCTW sfo{};
-    sfo.hwnd = hwnd;
-    sfo.wFunc = FO_DELETE;
-    sfo.pFrom = buf.c_str();
-    sfo.fFlags = FOF_ALLOWUNDO;  // 走回收站，同步执行；完成后文件已不在容器中
-    return SHFileOperationW(&sfo) == 0 && !sfo.fAnyOperationsAborted;
+    // IFileOperation 取代已弃用的 SHFileOperationW：支持长路径/Unicode，FOF_ALLOWUNDO 进回收站可还原
+    ComPtr<IFileOperation> fo;
+    if (FAILED(CoCreateInstance(CLSID_FileOperation, nullptr, CLSCTX_ALL, IID_PPV_ARGS(&fo))))
+        return false;
+    fo->SetOperationFlags(FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI);
+    ComPtr<IShellItem> item;
+    if (FAILED(SHCreateItemFromParsingName(path.c_str(), nullptr, IID_PPV_ARGS(&item))))
+        return false;
+    if (FAILED(fo->DeleteItem(item.Get(), nullptr))) return false;
+    if (FAILED(fo->PerformOperations())) return false;
+    BOOL aborted = FALSE;
+    fo->GetAnyOperationsAborted(&aborted);
+    return !aborted;
 }
 
 }  // namespace lb
