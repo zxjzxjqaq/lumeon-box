@@ -419,7 +419,7 @@ void ClipboardMonitor::OnClipboardUpdate() {
     bool hasDibV5 = IsClipboardFormatAvailable(CF_DIBV5) != FALSE;
     bool hasDib = IsClipboardFormatAvailable(CF_DIB) != FALSE;
     bool hasDrop = IsClipboardFormatAvailable(CF_HDROP) != FALSE;
-    if (hasDrop) avail.push_back("hdrop");
+    if (hasDrop) return fail();  // 只留文本/图片：不记录文件复制（去掉「文件」剪贴板）
     if (hasPng || hasDibV5 || hasDib) avail.push_back("png");
     if (hasHtml) avail.push_back("html");
     if (hasText) avail.push_back("text");
@@ -589,7 +589,7 @@ void ClipboardMonitor::OnClipboardUpdate() {
     // 微信等聊天应用复制带图消息：整段聊天以 HTML 复制（图片 base64 内嵌），
     // 文本呈现只是"[图片]"占位——提取全部内嵌图（至多 6 张），条目按图片呈现
     // （缩略图/悬停网格原图/回写为图片，而非一排占位文字）
-    if (type == "html") {
+    if (hasHtml) {  // 微信/QQ 取图依赖 html 内容；类型已收敛为 text/image，故按 hasHtml 判断
         std::string html;
         for (auto& pl : job.entry.payloads)
             if (pl.fmt == "html" && !pl.text.empty()) {
@@ -660,7 +660,7 @@ void ClipboardMonitor::OnClipboardUpdate() {
     // 临时文件，富文本格式（WeChat/QQ_RichEdit_Format）以
     // <EditElement type="1" filepath="...png"> 引用，文字在 CDATA。
     // 读引用文件转 png 载荷（与聊天片段 base64 提取同管线），文字保留回写。
-    if (type == "html") {
+    if (hasHtml) {  // 微信/QQ 取图依赖 html 内容；类型已收敛为 text/image，故按 hasHtml 判断
         for (auto& cap : richEditCaptured) {
             const std::string& re = cap.second;
             if (re.empty()) continue;

@@ -71,8 +71,6 @@ return buf;
 }
 
 std::wstring TypeTag(const std::string& t) {
-if (t == "html") return L"表格";
-if (t == "files") return L"文件";
 if (t == "image") return L"图片";
 return L"文本";
 }
@@ -235,8 +233,8 @@ std::vector<int> out;
 for (int i = 0; i < (int)items_.size(); ++i) {
 const ClipEntry& e = items_[i];
 std::string t = EffType(e);
-bool hit = filter_ == 0 || (filter_ == 1 && (t == "text" || t == "html")) ||
-(filter_ == 2 && t == "image") || (filter_ == 3 && t == "files");
+if (t != "text" && t != "image") continue;  // 只展示文本/图片（跳过遗留非图文件条目）
+bool hit = filter_ == 0 || (filter_ == 1 && t == "text") || (filter_ == 2 && t == "image");
 if (hit) out.push_back(i);
 }
 return out;
@@ -344,7 +342,8 @@ return th;
 
 // 展示归类：全部路径都是图片文件的 files 条目�?图片"呈现（标�?筛�?悬停一致）
 std::string ClipPanel::EffType(const ClipEntry& e) const {
-if (e.type == "files") {
+if (e.type == "image") return "image";
+if (e.type == "files") {  // 遗留文件条目：全图按图片呈现，否则不再展示
 const auto& paths = DropPaths(e);
 if (!paths.empty()) {
 bool allImg = true;
@@ -352,8 +351,9 @@ for (auto& p : paths)
 if (!IsImageFile(p)) { allImg = false; break; }
 if (allImg) return "image";
 }
+return "files";
 }
-return e.type;
+return "text";  // text/html 一律归为文本
 }
 
 bool ClipPanel::CopyRow(int row) {
@@ -381,7 +381,7 @@ return x >= r.left && x < r.right && y >= r.top && y < r.bottom;
 int ClipPanel::HitHeader(int x, int y) const {
 if (y >= kHeaderH) return 0;
 // Tab：与绘制同参数（kTabX0=14, kTabW=62, kTabGap=6）
-for (int i = 0; i < 4; ++i) {
+for (int i = 0; i < 3; ++i) {
     float x0 = 14.f + i * 68.f;
     if (x >= x0 && x < x0 + 62.f) return 100 + i;
 }
@@ -456,7 +456,7 @@ gd::Pen stroke(&aurora, 1.2f);
 g.DrawPath(&stroke, &path);
 
         // ---- 头部：过滤 Tab（圆角胶囊，间距 8px；高度随 kHeaderH 居中）----
-const wchar_t* tabs[4] = {L"全部", L"文本", L"图片", L"文件"};
+const wchar_t* tabs[3] = {L"全部", L"文本", L"图片"};
 gd::Font fTab(L"Microsoft YaHei UI", 14.f, gd::FontStyleRegular, gd::UnitPixel);
 constexpr float kTabW = 62.f, kTabGap = 6.f, kTabH = 28.f;
 constexpr float kTabX0 = 14.f;
@@ -465,7 +465,7 @@ gd::StringFormat tsf;
 tsf.SetAlignment(gd::StringAlignmentCenter);
 tsf.SetLineAlignment(gd::StringAlignmentCenter);
 tsf.SetFormatFlags(gd::StringFormatFlagsNoWrap);
-for (int i = 0; i < 4; ++i) {
+for (int i = 0; i < 3; ++i) {
 gd::RectF rc(kTabX0 + i * (kTabW + kTabGap), tabY, kTabW, kTabH);
 // 文本矩形：向下留出整行高度，避免 GDI+ 行距导致 CJK 字形溢出胶囊（实测溢出会
 // 在胶囊外再画一份，看起来像"重影"）
@@ -563,22 +563,33 @@ int row = scroll_ + vi;
 const ClipEntry& e = items_[rows_[row]];
 float y = (gd::REAL)(kHeaderH + vi * kRowH);
 // 行底：选中 > 悬停 > 无（三者互斥，避免叠加出脏色）
+// 玻璃卡片（方案 B）：每条独立圆角卡面，选中/悬停浮现极光描边
+float cx0 = 10.f, cy0 = y + 4.f, cw = (gd::REAL)(w - 20), ch = (gd::REAL)kRowH - 10.f;
+gd::GraphicsPath card;
+float cr = 12.f;
+card.AddArc(cx0, cy0, cr, cr, 180, 90);
+card.AddArc(cx0 + cw - cr, cy0, cr, cr, 270, 90);
+card.AddArc(cx0 + cw - cr, cy0 + ch - cr, cr, cr, 0, 90);
+card.AddArc(cx0, cy0 + ch - cr, cr, cr, 90, 90);
+card.CloseFigure();
+gd::SolidBrush cardBg(row == sel_ ? kSelRow : (row == hoverRow_ ? kHoverRow : gd::Color(255, 17, 21, 31)));
+g.FillPath(&cardBg, &card);
 if (row == sel_) {
-    gd::SolidBrush hl(kSelRow);
-    g.FillRectangle(&hl, gd::RectF(8.f, y + 2.f, (gd::REAL)(w - 16), (gd::REAL)kRowH - 4.f));
-} else if (row == hoverRow_) {
-    gd::SolidBrush hv(kHoverRow);
-    g.FillRectangle(&hv, gd::RectF(8.f, y + 2.f, (gd::REAL)(w - 16), (gd::REAL)kRowH - 4.f));
+    gd::LinearGradientBrush ag(gd::PointF(cx0, cy0), gd::PointF(cx0 + cw, cy0 + ch),
+                               gd::Color(0, 0, 0, 0), gd::Color(0, 0, 0, 0));
+    gd::Color ac[3] = {gd::Color(210, 34, 211, 238), gd::Color(210, 129, 140, 248),
+                       gd::Color(210, 192, 132, 252)};
+    gd::REAL ap[3] = {0.f, 0.5f, 1.f};
+    ag.SetInterpolationColors(ac, ap, 3);
+    gd::Pen apen(&ag, 1.4f);
+    g.DrawPath(&apen, &card);
+} else {
+    gd::Pen cpen(row == hoverRow_ ? gd::Color(130, 34, 211, 238) : kLine, 1.f);
+    g.DrawPath(&cpen, &card);
 }
-if (e.pinned) {  // 置顶：左缘琥珀条
+if (e.pinned) {  // 置顶：左缘极光紫条
     gd::SolidBrush pin(kPin);
-    g.FillRectangle(&pin, gd::RectF(8.f, y + 2.f, 3.f, (gd::REAL)kRowH - 4.f));
-}
-// 行间细分隔线（最后一行不画）
-if (vi + 1 < n) {
-    gd::SolidBrush sep(kRowSep);
-    g.FillRectangle(&sep, gd::RectF(16.f, y + (gd::REAL)kRowH - 1.5f,
-                                    (gd::REAL)(w - 32), 1.f));
+    g.FillRectangle(&pin, gd::RectF(cx0 + 1.5f, cy0 + 9.f, 3.f, ch - 18.f));
 }
             // 左：缩略图（图片条目 / 指向图片文件的文件条目）或类型徽标
 constexpr float kBoxImg = 52.f, kBoxBadge = 36.f;
@@ -1246,7 +1257,7 @@ self->store_->Remove(self->items_[self->rows_[self->sel_]].id);
 self->Refresh();
 }
 } else if (wp == VK_TAB) {
-self->filter_ = (self->filter_ + 1) % 4;
+self->filter_ = (self->filter_ + 1) % 3;
 self->sel_ = 0;
 self->scroll_ = 0;
 self->Refresh();

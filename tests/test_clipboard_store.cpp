@@ -43,9 +43,9 @@ TEST_CASE("FNV 哈希稳定且区分内容", "[clipstore]") {
 
 TEST_CASE("格式优先级：files > image > html > text", "[clipstore]") {
     REQUIRE(ClipTypeFromFormats({"text"}) == "text");
-    REQUIRE(ClipTypeFromFormats({"html", "text"}) == "html");
+    REQUIRE(ClipTypeFromFormats({"html", "text"}) == "text");  // html 归一为文本
     REQUIRE(ClipTypeFromFormats({"png", "text"}) == "image");
-    REQUIRE(ClipTypeFromFormats({"hdrop", "text"}) == "files");
+    REQUIRE(ClipTypeFromFormats({"hdrop", "text"}) == "text");  // 不再产生 files 类型
     REQUIRE(ClipTypeFromFormats({"png", "html", "text"}) == "image");
     REQUIRE(ClipTypeFromFormats({}) == "text");
     REQUIRE(ClipTypeFromFormats({"weird"}) == "text");

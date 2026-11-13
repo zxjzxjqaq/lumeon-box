@@ -29,9 +29,8 @@ std::string ClipTypeFromFormats(const std::vector<std::string>& avail) {
             if (s == f) return true;
         return false;
     };
-    if (has("hdrop")) return "files";
+    // 只保留文本/图片两类：有图即 image，其余（含 html/纯文本）归一为 text；不再产生 files/html
     if (has("png")) return "image";
-    if (has("html")) return "html";
     return "text";
 }
 
