@@ -11,7 +11,7 @@ namespace gd = Gdiplus;
 namespace {
 // ---- 设计 token（ui-ux-pro-max：Slate 深色�?+ Teal 强调，扁平无阴影�?---
 // 对比度均 �?4.5:1�?F1F5F9/#0F172A�?6:1�?94A3B8/#0F172A�?.4:1�?2DD4BF/#0F172A�?:1
-const gd::Color kPanelBg(255, 11, 14, 20);     // #0F172A slate-900 面板底（须不透明：
+const gd::Color kPanelBg(205, 11, 14, 20);     // #0F172A slate-900 面板底（须不透明：
                                                // 分层窗 alpha<255 会让桌面内容透出，实测很脏）
 const gd::Color kPanelStroke(255, 38, 44, 60); // #2D3A4E 面板描边
 const gd::Color kText(255, 235, 238, 245);     // #F1F5F9 slate-100 主文字
@@ -572,7 +572,7 @@ card.AddArc(cx0 + cw - cr, cy0, cr, cr, 270, 90);
 card.AddArc(cx0 + cw - cr, cy0 + ch - cr, cr, cr, 0, 90);
 card.AddArc(cx0, cy0 + ch - cr, cr, cr, 90, 90);
 card.CloseFigure();
-gd::SolidBrush cardBg(row == sel_ ? kSelRow : (row == hoverRow_ ? kHoverRow : gd::Color(255, 17, 21, 31)));
+gd::SolidBrush cardBg(row == sel_ ? gd::Color(230, 18, 30, 44) : (row == hoverRow_ ? gd::Color(26, 255, 255, 255) : gd::Color(16, 255, 255, 255)));
 g.FillPath(&cardBg, &card);
 if (row == sel_) {
     gd::LinearGradientBrush ag(gd::PointF(cx0, cy0), gd::PointF(cx0 + cw, cy0 + ch),
