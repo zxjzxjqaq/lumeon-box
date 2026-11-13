@@ -1185,8 +1185,8 @@ void DesktopGrid::OnMouse(HWND hwnd, UINT msg, float x, float y) {
             int t = GetSystemMetrics(SM_CXDRAG);  // 系统“拖动”判定距离（默认 4px）
             if (!drag_moved_ && (abs(dx) > t || abs(dy) > t)) drag_moved_ = true;
             if (drag_moved_) {
+                std::wstring p = pending_file_;  // 必须先取路径：ReleaseCapture 会同步派发 WM_CAPTURECHANGED 清空 pending_file_
                 ReleaseCapture();
-                std::wstring p = pending_file_;
                 file_press_ = false;
                 pending_file_.clear();
                 dragging_ = false;
