@@ -97,9 +97,11 @@ static BOOL CALLBACK FindByPidProc(HWND h, LPARAM lp) {
     return TRUE;
 }
 
-// 检测「已有实例」：宿主窗口（LumenBoxHost，常驻且顶层）存在即算在运行。
+// 检测「已有实例」：宿主窗口（LumenBoxHost，常驻）存在即算在运行。
 static bool ExistingInstanceAlive() {
-    if (HWND h = FindWindowW(L"LumenBoxHost", nullptr)) {
+    // LumenBoxHost 是消息-only 窗口（父为 HWND_MESSAGE），FindWindowW 只搜顶层窗口找不到它，
+    // 必须用 FindWindowExW(HWND_MESSAGE,…) 枚举消息窗口，否则单实例判定恒失败 → 误判僵尸/多开。
+    if (HWND h = FindWindowExW(HWND_MESSAGE, nullptr, L"LumenBoxHost", nullptr)) {
         DWORD pid = 0;
         GetWindowThreadProcessId(h, &pid);
         if (pid && pid != GetCurrentProcessId()) return true;
@@ -489,6 +491,10 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
             UseBottomMode(h);
         else if (mode == DesktopMode::Bottom)
             UseBottomMode(h);
+        // 托盘图标随旧窗口销毁而消失：用新 HWND 重新挂上。不能只依赖 TaskbarCreated→resyncShell，
+        // 那条广播可能早于重建发生（用旧/空 HWND 挂托盘失败），导致恢复后托盘图标永久丢失。
+        tray.Remove();
+        tray.Add(h, WM_APP + 1, LoadIconW(hInst, MAKEINTRESOURCEW(IDI_APP)), L"LumenBox 桌面整理");
         StageTrace("r:recreate-OK");
         return true;
     };
