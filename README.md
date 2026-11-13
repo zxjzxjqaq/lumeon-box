@@ -16,7 +16,7 @@
 - **单实例**：重复启动会唤醒已开窗口，不产生多开。
 
 ## 安装
-- 直接运行 `installer\LumenBox-Setup-1.0.0.exe`（或在 GitHub [Releases](https://github.com/zxjzxjqaq/lumeon-box/releases) 下载）。
+- 在 GitHub [Releases](https://github.com/zxjzxjqaq/lumeon-box/releases) 下载最新安装包 `LumenBox-Setup-<版本>.exe` 运行。
 - 安装后自动创建桌面/开始菜单快捷方式，并支持卸载。
 
 ## 从源码构建
