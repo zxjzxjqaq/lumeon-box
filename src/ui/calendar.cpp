@@ -58,10 +58,8 @@ void Calendar::Open(HWND owner, int y, int m, int d, int px, int py) {
         wc.hbrBackground = nullptr;
         RegisterClassW(&wc);
         int w = (int)(kW * scale_), h = (int)(kH * scale_);
-        hwnd_ = CreateWindowExW(WS_EX_TOOLWINDOW, wc.lpszClassName, L"选择日期",
+        hwnd_ = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_LAYERED, wc.lpszClassName, L"选择日期",
                                 WS_POPUP, px, py, w, h, owner, nullptr, wc.hInstance, this);
-        HRGN rgn = CreateRoundRectRgn(0, 0, w, h, (int)(24 * scale_), (int)(24 * scale_));
-        SetWindowRgn(hwnd_, rgn, TRUE);
     }
     // 夹回工作区（用缩放后的物理尺寸，避免高 DPI 下越界）
     RECT work{};
@@ -153,17 +151,45 @@ LRESULT CALLBACK Calendar::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_PAINT: {
         EnsureGdip();
         PAINTSTRUCT ps;
-        HDC hdc = BeginPaint(hwnd, &ps);
-        {
-            Gdiplus::Graphics g(hdc);
+        BeginPaint(hwnd, &ps);
+        EndPaint(hwnd, &ps);
+        if (!self) return 0;
+        // 分层窗：DIB 整帧 + UpdateLayeredWindow（烟熏玻璃半透明，与剪贴板面板同款）
+        const int pw = (int)(kW * self->scale_), ph = (int)(kH * self->scale_);
+        HDC screen = GetDC(nullptr);
+        HDC mem = CreateCompatibleDC(screen);
+        BITMAPINFO bmi{};
+        bmi.bmiHeader.biSize = sizeof(bmi.bmiHeader);
+        bmi.bmiHeader.biWidth = pw;
+        bmi.bmiHeader.biHeight = -ph;
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biCompression = BI_RGB;
+        void* bits = nullptr;
+        HBITMAP dib = CreateDIBSection(screen, &bmi, DIB_RGB_COLORS, &bits, nullptr, 0);
+        if (dib) {
+            HGDIOBJ old = SelectObject(mem, dib);
+            {
+            Gdiplus::Graphics g(mem);
             g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-            g.SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAlias);
-            if (self) g.ScaleTransform(self->scale_, self->scale_);  // 逻辑 → 物理（高 DPI 清晰）
+            g.SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAliasGridFit);
+            g.ScaleTransform(self->scale_, self->scale_);  // 逻辑 → 物理（高 DPI 清晰）
+            Gdiplus::SolidBrush clear(Gdiplus::Color(0, 0, 0, 0));
+            g.FillRectangle(&clear, Gdiplus::RectF(0, 0, (float)kW, (float)kH));
             Gdiplus::GraphicsPath path;
             BuildCard(path, 0.5f, 0.5f, (float)kW - 1.f, (float)kH - 1.f, 12.f);
-            Gdiplus::SolidBrush fill(Gdiplus::Color(0x0B, 0x0E, 0x14));
+            Gdiplus::SolidBrush fill(Gdiplus::Color(205, 11, 14, 20));  // 烟熏玻璃
             g.FillPath(&fill, &path);
-            Gdiplus::Pen border(Gdiplus::Color(36, 255, 255, 255), 1.f);
+            Gdiplus::LinearGradientBrush aurora(Gdiplus::PointF(0, 0),
+                                                Gdiplus::PointF((float)kW, (float)kH),
+                                                Gdiplus::Color(0, 0, 0, 0),
+                                                Gdiplus::Color(0, 0, 0, 0));
+            Gdiplus::Color acols[3] = {Gdiplus::Color(120, 34, 211, 238),
+                                       Gdiplus::Color(120, 129, 140, 248),
+                                       Gdiplus::Color(120, 192, 132, 252)};
+            Gdiplus::REAL apos[3] = {0.f, 0.5f, 1.f};
+            aurora.SetInterpolationColors(acols, apos, 3);
+            Gdiplus::Pen border(&aurora, 1.2f);
             g.DrawPath(&border, &path);
 
             Gdiplus::Font f(L"Microsoft YaHei UI", 11.f, Gdiplus::FontStyleRegular,
@@ -237,8 +263,25 @@ LRESULT CALLBACK Calendar::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             Gdiplus::RectF cancel((float)(kW / 2), (float)kFootTop, (float)(kW / 2 - kPad),
                                   (float)kFootH);
             g.DrawString(L"\u53D6\u6D88", -1, &f, cancel, &sf, &dim);  // 取消
+            }
+            // 预乘 alpha（ULW 要求）
+            auto* px = static_cast<unsigned*>(bits);
+            for (int i = 0; i < pw * ph; ++i) {
+                unsigned a = (px[i] >> 24) & 0xFF;
+                px[i] = (a << 24) |
+                        ((((px[i] >> 16) & 0xFF) * a / 255) << 16) |
+                        ((((px[i] >> 8) & 0xFF) * a / 255) << 8) |
+                        (((px[i] & 0xFF) * a / 255));
+            }
+            POINT src{0, 0};
+            SIZE sz{pw, ph};
+            BLENDFUNCTION bf{AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+            UpdateLayeredWindow(hwnd, screen, nullptr, &sz, mem, &src, 0, &bf, ULW_ALPHA);
+            SelectObject(mem, old);
+            DeleteObject(dib);
         }
-        EndPaint(hwnd, &ps);
+        DeleteDC(mem);
+        ReleaseDC(nullptr, screen);
         return 0;
     }
     case WM_CLOSE:

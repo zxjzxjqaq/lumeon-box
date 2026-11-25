@@ -43,6 +43,10 @@ SpikeConfig ConfigStore::load() const {
         c.clipboardBlobMB = j.value("clipboardBlobMB", c.clipboardBlobMB);
         c.clipboardRecordSource = j.value("clipboardRecordSource", c.clipboardRecordSource);
         c.clipboardPaused = j.value("clipboardPaused", c.clipboardPaused);
+        c.searchFolders = j.value("searchFolders", c.searchFolders);
+        c.todoReminder = j.value("todoReminder", c.todoReminder);
+        c.todoReminderHour = j.value("todoReminderHour", c.todoReminderHour);
+        c.todoRemindLast = j.value("todoRemindLast", c.todoRemindLast);
         if (j.contains("boxes") && j["boxes"].is_array() && !j["boxes"].empty()) {
             std::vector<BoxDef> loaded;
             for (auto& e : j["boxes"]) {
@@ -54,6 +58,10 @@ SpikeConfig ConfigStore::load() const {
                     b.folder = ToWide(e["folder"].get<std::string>());
                 b.type = e.value("type", "data");
                 b.collapsed = e.value("collapsed", false);
+                b.sort = e.value("sort", 0);
+                b.color = e.value("color", 0);
+                if (b.sort < 0 || b.sort > 2) b.sort = 0;
+                if (b.color < 0 || b.color > 5) b.color = 0;
                 if (!b.id.empty()) loaded.push_back(std::move(b));
             }
             if (!loaded.empty()) c.boxes = std::move(loaded);
@@ -75,6 +83,8 @@ SpikeConfig ConfigStore::load() const {
         if (c.clipboardMaxEntries > 500) c.clipboardMaxEntries = 500;
         if (c.clipboardBlobMB < 8) c.clipboardBlobMB = 8;
         if (c.clipboardBlobMB > 512) c.clipboardBlobMB = 512;
+        if (c.todoReminderHour < 0) c.todoReminderHour = 0;
+        if (c.todoReminderHour > 23) c.todoReminderHour = 23;
     } catch (...) {
         c.boxes = DefaultBoxes();  // 损坏即回默认两盒，绝不阻塞启动
     }
@@ -88,7 +98,9 @@ bool ConfigStore::save(const SpikeConfig& c) const {
                             {"name", ToUtf8(b.name)},
                             {"folder", ToUtf8(b.folder)},
                             {"type", b.type},
-                            {"collapsed", b.collapsed}});
+                            {"collapsed", b.collapsed},
+                            {"sort", b.sort},
+                            {"color", b.color}});
     json::json j{{"mode", c.mode},
                  {"anchored", c.anchored},
                  {"boxes", boxesArr},
@@ -103,7 +115,11 @@ bool ConfigStore::save(const SpikeConfig& c) const {
                  {"clipboardMaxEntries", c.clipboardMaxEntries},
                  {"clipboardBlobMB", c.clipboardBlobMB},
                  {"clipboardRecordSource", c.clipboardRecordSource},
-                 {"clipboardPaused", c.clipboardPaused}};
+                 {"clipboardPaused", c.clipboardPaused},
+                 {"searchFolders", c.searchFolders},
+                 {"todoReminder", c.todoReminder},
+                 {"todoReminderHour", c.todoReminderHour},
+                 {"todoRemindLast", c.todoRemindLast}};
     std::error_code ec;
     fs::create_directories(file_.parent_path(), ec);
     auto tmp = file_.wstring() + L".tmp";

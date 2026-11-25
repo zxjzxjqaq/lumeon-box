@@ -80,6 +80,8 @@ private:
         std::wstring name;     // 显示名（用户可就地重命名）
         std::wstring folder;   // 容器内子目录（data 盒）；tasks 盒为空
         bool isTasks = false;
+        int sort = 0;   // 0=名称 1=时间 2=类型
+        int color = 0;  // 强调色索引
         std::vector<std::wstring> files;   // 绝对路径（已排序）
         bool collapsed = false;
         bool hovered = false;

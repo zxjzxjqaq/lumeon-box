@@ -5,6 +5,7 @@
 #include <gdiplus.h>
 #include <algorithm>
 #include <ctime>
+#include <cwctype>
 
 namespace gd = Gdiplus;
 
@@ -143,7 +144,7 @@ wc.style = CS_DBLCLKS;  // 否则 WM_LBUTTONDBLCLK 永不触发（双击复制�
 wc.lpszClassName = L"LumenBoxClipPanel";
 RegisterClassW(&wc);
 scale_ = GetDpiForSystem() / 96.f;
-int w = (int)(kW * scale_), h = (int)((kHeaderH + 10 + kRowH * 4) * scale_);
+int w = (int)(kW * scale_), h = (int)((kBodyY + 10 + kRowH * 4) * scale_);
 hwnd_ = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
 wc.lpszClassName, L"LumenBox 剪贴板", WS_POPUP,
 CW_USEDEFAULT, CW_USEDEFAULT, w, h, nullptr, nullptr,
@@ -235,13 +236,36 @@ const ClipEntry& e = items_[i];
 std::string t = EffType(e);
 if (t != "text" && t != "image") continue;  // 只展示文本/图片（跳过遗留非图文件条目）
 bool hit = filter_ == 0 || (filter_ == 1 && t == "text") || (filter_ == 2 && t == "image");
+if (hit && !query_.empty() && !MatchQuery(e)) hit = false;
 if (hit) out.push_back(i);
 }
 return out;
 }
 
+namespace {
+std::wstring LowerAll(const std::wstring& s) {
+std::wstring o = s;
+for (auto& c : o) c = (wchar_t)towlower(c);
+return o;
+}
+}  // namespace
+
+bool ClipPanel::MatchQuery(const ClipEntry& e) const {
+const std::wstring q = LowerAll(query_);
+if (q.empty()) return true;
+auto has = [&](const std::wstring& s) { return LowerAll(s).find(q) != std::wstring::npos; };
+if (has(e.text) || has(e.source)) return true;
+for (const auto& p : e.payloads) {
+if (p.text.empty()) continue;
+if (p.fmt == "text" || p.fmt == "html" || p.fmt == "ocr") {
+if (has(ToWide(p.text))) return true;
+}
+}
+return false;
+}
+
 int ClipPanel::VisibleCount() const {
-return std::max(1, (winH_ - kHeaderH - 10) / kRowH);
+return std::max(1, (winH_ - kBodyY - 10) / kRowH);
 }
 
 void ClipPanel::Refresh() {
@@ -264,8 +288,8 @@ int maxH = 0;
 RECT work{};
 if (SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0)) maxH = work.bottom - work.top;
 maxH = (int)(maxH * 0.7 / scale_);  // 逻辑像素
-int want = kHeaderH + 10 + (int)rows_.size() * kRowH;
-winH_ = std::min(std::max(want, kHeaderH + 10 + kRowH), maxH);
+int want = kBodyY + 10 + (int)rows_.size() * kRowH;
+winH_ = std::min(std::max(want, kBodyY + 10 + kRowH), maxH);
 int pw = (int)(kW * scale_), ph = (int)(winH_ * scale_);
 SetWindowPos(hwnd_, nullptr, 0, 0, pw, ph, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
@@ -368,11 +392,220 @@ return true;
 return false;
 }
 
+bool ClipPanel::HasOcr(const ClipEntry& e) const {
+for (auto& p : e.payloads)
+if (p.fmt == "ocr") return true;
+return false;
+}
+
+void ClipPanel::CopyOcrRow(int row) {
+if (row < 0 || row >= (int)rows_.size() || !copyFn_ || !store_) return;
+const ClipEntry& e = items_[rows_[row]];
+std::string bytes;
+if (!store_->LoadPayload(e, "ocr", bytes) || bytes.empty()) return;
+ClipEntry tmp;  // 借用回写通道（含自写抑制），把认字文字当普通文本复制
+tmp.type = "text";
+tmp.text = ToWide(bytes);
+tmp.textInline = true;
+ClipPayload p;
+p.fmt = "text";
+p.text = bytes;
+p.size = bytes.size();
+tmp.payloads.push_back(std::move(p));
+if (copyFn_(tmp)) ShowToast(L"已复制认字文字");
+}
+
+// ---------------------------------------------------------- 图片拖出（OLE）
+
+namespace {
+// 拖出载荷：CF_BITMAP / CF_DIB / 注册 PNG 格式（微信/文档/画图通吃）
+class ImgDataObject : public IDataObject {
+public:
+    ImgDataObject(HBITMAP bmp, HGLOBAL dib, HGLOBAL png)
+        : bmp_(bmp), dib_(dib), png_(png), ref_(1) {
+        fmtPng_ = RegisterClipboardFormatW(L"PNG");
+    }
+    ~ImgDataObject() {
+        if (bmp_) DeleteObject(bmp_);
+        if (dib_) GlobalFree(dib_);
+        if (png_) GlobalFree(png_);
+    }
+    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
+        if (!ppv) return E_POINTER;
+        if (riid == IID_IUnknown || riid == IID_IDataObject) {
+            *ppv = static_cast<IDataObject*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *ppv = nullptr;
+        return E_NOINTERFACE;
+    }
+    STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&ref_); }
+    STDMETHODIMP_(ULONG) Release() override {
+        LONG r = InterlockedDecrement(&ref_);
+        if (r == 0) delete this;
+        return r;
+    }
+    STDMETHODIMP GetData(FORMATETC* fe, STGMEDIUM* sm) override {
+        if (!fe || !sm) return E_INVALIDARG;
+        ZeroMemory(sm, sizeof(*sm));
+        if (fe->cfFormat == CF_BITMAP && (fe->tymed & TYMED_GDI)) {
+            sm->tymed = TYMED_GDI;
+            sm->hBitmap = (HBITMAP)CopyImage(bmp_, IMAGE_BITMAP, 0, 0, 0);
+            return sm->hBitmap ? S_OK : E_OUTOFMEMORY;
+        }
+        HGLOBAL src = nullptr;
+        if (fe->cfFormat == CF_DIB && (fe->tymed & TYMED_HGLOBAL)) src = dib_;
+        else if (fe->cfFormat == fmtPng_ && (fe->tymed & TYMED_HGLOBAL)) src = png_;
+        if (!src) return DV_E_FORMATETC;
+        SIZE_T n = GlobalSize(src);
+        HGLOBAL dup = GlobalAlloc(GMEM_MOVEABLE, n);
+        if (!dup) return E_OUTOFMEMORY;
+        void* d = GlobalLock(dup);
+        void* s = GlobalLock(src);
+        memcpy(d, s, n);
+        GlobalUnlock(src);
+        GlobalUnlock(dup);
+        sm->tymed = TYMED_HGLOBAL;
+        sm->hGlobal = dup;
+        return S_OK;
+    }
+    STDMETHODIMP GetDataHere(FORMATETC*, STGMEDIUM*) override { return E_NOTIMPL; }
+    STDMETHODIMP QueryGetData(FORMATETC* fe) override {
+        if (!fe) return E_INVALIDARG;
+        if (fe->cfFormat == CF_BITMAP || fe->cfFormat == CF_DIB || fe->cfFormat == fmtPng_)
+            return S_OK;
+        return DV_E_FORMATETC;
+    }
+    STDMETHODIMP GetCanonicalFormatEtc(FORMATETC*, FORMATETC* out) override {
+        if (out) out->ptd = nullptr;
+        return E_NOTIMPL;
+    }
+    STDMETHODIMP SetData(FORMATETC*, STGMEDIUM*, BOOL) override { return E_NOTIMPL; }
+    STDMETHODIMP EnumFormatEtc(DWORD, IEnumFORMATETC** out) override {
+        if (out) *out = nullptr;
+        return E_NOTIMPL;
+    }
+    STDMETHODIMP DAdvise(FORMATETC*, DWORD, IAdviseSink*, DWORD*) override {
+        return OLE_E_ADVISENOTSUPPORTED;
+    }
+    STDMETHODIMP DUnadvise(DWORD) override { return OLE_E_ADVISENOTSUPPORTED; }
+    STDMETHODIMP EnumDAdvise(IEnumSTATDATA** out) override {
+        if (out) *out = nullptr;
+        return OLE_E_ADVISENOTSUPPORTED;
+    }
+
+private:
+    HBITMAP bmp_;
+    HGLOBAL dib_, png_;
+    UINT fmtPng_ = 0;
+    LONG ref_;
+};
+
+class ImgDropSource : public IDropSource {
+public:
+    ImgDropSource() : ref_(1) {}
+    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
+        if (!ppv) return E_POINTER;
+        if (riid == IID_IUnknown || riid == IID_IDropSource) {
+            *ppv = static_cast<IDropSource*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *ppv = nullptr;
+        return E_NOINTERFACE;
+    }
+    STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&ref_); }
+    STDMETHODIMP_(ULONG) Release() override {
+        LONG r = InterlockedDecrement(&ref_);
+        if (r == 0) delete this;
+        return r;
+    }
+    STDMETHODIMP QueryContinueDrag(BOOL esc, DWORD keys) override {
+        if (esc) return DRAGDROP_S_CANCEL;
+        if (!(keys & MK_LBUTTON)) return DRAGDROP_S_DROP;
+        return S_OK;
+    }
+    STDMETHODIMP GiveFeedback(DWORD) override { return DRAGDROP_S_USEDEFAULTCURSORS; }
+
+private:
+    LONG ref_;
+};
+
+HGLOBAL PngToDib(HBITMAP bmp) {
+    BITMAP bm{};
+    if (!GetObjectW(bmp, sizeof(bm), &bm)) return nullptr;
+    BITMAPINFO bi{};
+    bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+    bi.bmiHeader.biWidth = bm.bmWidth;
+    bi.bmiHeader.biHeight = bm.bmHeight;
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+    SIZE_T bytes = (SIZE_T)bm.bmWidth * bm.bmHeight * 4;
+    HGLOBAL hg = GlobalAlloc(GMEM_MOVEABLE, sizeof(BITMAPINFOHEADER) + bytes);
+    if (!hg) return nullptr;
+    auto* out = static_cast<unsigned char*>(GlobalLock(hg));
+    memcpy(out, &bi.bmiHeader, sizeof(bi.bmiHeader));
+    HDC dc = GetDC(nullptr);
+    int got = GetDIBits(dc, bmp, 0, bm.bmHeight, out + sizeof(BITMAPINFOHEADER), &bi,
+                        DIB_RGB_COLORS);
+    ReleaseDC(nullptr, dc);
+    GlobalUnlock(hg);
+    if (got == 0) {
+        GlobalFree(hg);
+        return nullptr;
+    }
+    return hg;
+}
+}  // namespace
+
+void ClipPanel::StartImageDrag(int row) {
+if (row < 0 || row >= (int)rows_.size() || !store_) return;
+const ClipEntry& e = items_[rows_[row]];
+std::string png;
+if (!store_->LoadPayload(e, "png", png) || png.empty()) return;
+HGLOBAL pngHg = GlobalAlloc(GMEM_MOVEABLE, png.size());
+if (!pngHg) return;
+void* pd = GlobalLock(pngHg);
+memcpy(pd, png.data(), png.size());
+GlobalUnlock(pngHg);
+IStream* st = nullptr;
+if (FAILED(CreateStreamOnHGlobal(pngHg, FALSE, &st)) || !st) {
+GlobalFree(pngHg);
+return;
+}
+HBITMAP bmp = nullptr;
+{
+gd::Bitmap bm(st);
+if (bm.GetLastStatus() == gd::Ok) bm.GetHBITMAP(gd::Color(0, 0, 0, 0), &bmp);
+}
+st->Release();
+if (!bmp) {
+GlobalFree(pngHg);
+return;
+}
+HGLOBAL dib = PngToDib(bmp);
+if (!dib) {
+DeleteObject(bmp);
+GlobalFree(pngHg);
+return;
+}
+HidePreview();
+auto* obj = new ImgDataObject(bmp, dib, pngHg);  // 所有权移交（Release 时释放）
+auto* src = new ImgDropSource();
+DWORD effect = 0;
+DoDragDrop(obj, src, DROPEFFECT_COPY, &effect);
+obj->Release();
+src->Release();
+}
+
 // ---------------------------------------------------------- 布局常量
 
 namespace {
 RECT PinRect(int y) { return {560 - 96, y + 20, 560 - 70, y + 40}; }
 RECT DelRect(int y) { return {560 - 64, y + 20, 560 - 38, y + 40}; }
+RECT OcrRect(int y) { return {560 - 128, y + 20, 560 - 102, y + 40}; }  // 图片认字复制
 bool InRect(const RECT& r, int x, int y) {
 return x >= r.left && x < r.right && y >= r.top && y < r.bottom;
 }
@@ -393,10 +626,11 @@ return 0;
 }
 
 int ClipPanel::HitRow(int x, int y) const {
-if (y < kHeaderH) return -1;
-int row = scroll_ + (y - kHeaderH) / kRowH;
+if (y < kBodyY) return -1;
+int row = scroll_ + (y - kBodyY) / kRowH;
 if (row < 0 || row >= (int)rows_.size()) return -1;
-int ry = kHeaderH + (row - scroll_) * kRowH;
+int ry = kBodyY + (row - scroll_) * kRowH;
+if (InRect(OcrRect(ry), x, y)) return 6000 + row;
 if (InRect(PinRect(ry), x, y)) return 4000 + row;
 if (InRect(DelRect(ry), x, y)) return 5000 + row;
 return row;  // 行本体：点击即复?
@@ -406,7 +640,7 @@ return row;  // 行本体：点击即复?
 
 void ClipPanel::Draw() {
 if (!hwnd_) return;
-int w = kW, h = winH_ ? winH_ : kHeaderH + 10 + kRowH * 4;
+int w = kW, h = winH_ ? winH_ : kBodyY + 10 + kRowH * 4;
 int pw = (int)(w * scale_), ph = (int)(h * scale_);
 HDC screen = GetDC(nullptr);
 HDC mem = CreateCompatibleDC(screen);
@@ -534,9 +768,33 @@ float cx = closeX + 6.f, cy = btnY + 7.f;
 g.DrawLine(&closePen, cx, cy, cx + 12.f, cy + 12.f);
 g.DrawLine(&closePen, cx, cy + 12.f, cx + 12.f, cy);
 }
+        // ---- 搜索条带（头部第二行）：直接打字过滤，Esc 清空 ----
+{
+gd::RectF sr(14.f, (gd::REAL)kHeaderH + 5.f, (gd::REAL)(w - 28), 26.f);
+gd::GraphicsPath sp;
+sp.AddArc(sr.X, sr.Y, 26.f, 26.f, 90, 180);
+sp.AddArc(sr.X + sr.Width - 26.f, sr.Y, 26.f, 26.f, 270, 180);
+sp.CloseFigure();
+gd::SolidBrush sb(gd::Color(16, 255, 255, 255));
+g.FillPath(&sb, &sp);
+gd::Pen spen(kLine, 1.f);
+g.DrawPath(&spen, &sp);
+gd::Font fQ(L"Microsoft YaHei UI", 12.f, gd::FontStyleRegular, gd::UnitPixel);
+gd::StringFormat qf;
+qf.SetFormatFlags(gd::StringFormatFlagsNoWrap);
+qf.SetLineAlignment(gd::StringAlignmentCenter);
+gd::RectF tr(sr.X + 12.f, sr.Y, sr.Width - 24.f, sr.Height);
+if (query_.empty()) {
+gd::SolidBrush ph(kTextDim);
+g.DrawString(L"搜索：文本内容 / 图片认字 / 来源应用", -1, &fQ, tr, &qf, &ph);
+} else {
+gd::SolidBrush qt(kText);
+g.DrawString(query_.c_str(), -1, &fQ, tr, &qf, &qt);
+}
+}
         // 分隔线
 gd::SolidBrush sep(kLine);
-g.FillRectangle(&sep, gd::RectF(8.f, (gd::REAL)kHeaderH, (gd::REAL)(w - 16), 1.f));
+g.FillRectangle(&sep, gd::RectF(8.f, (gd::REAL)kBodyY, (gd::REAL)(w - 16), 1.f));
 
         // ---- 空状�?----
 if (rows_.empty()) {
@@ -544,9 +802,9 @@ gd::Font fEmpty(L"Microsoft YaHei UI", 13.f, gd::FontStyleRegular, gd::UnitPixel
 gd::SolidBrush tc(kTextDim);
 gd::StringFormat cf;
 cf.SetAlignment(gd::StringAlignmentCenter);
-gd::RectF rc(0.f, (gd::REAL)(kHeaderH + 20), (gd::REAL)w, 30.f);
+gd::RectF rc(0.f, (gd::REAL)(kBodyY + 20), (gd::REAL)w, 30.f);
 g.DrawString(L"暂无剪贴板历史", -1, &fEmpty, rc, &cf, &tc);
-gd::RectF rc2(0.f, (gd::REAL)(kHeaderH + 52), (gd::REAL)w, 24.f);
+gd::RectF rc2(0.f, (gd::REAL)(kBodyY + 52), (gd::REAL)w, 24.f);
 gd::Font fSub(L"Microsoft YaHei UI", 10.f, gd::FontStyleRegular, gd::UnitPixel);
 g.DrawString(L"复制任意内容后自动记录", -1, &fSub, rc2, &cf, &tc);
 }
@@ -561,7 +819,7 @@ trim.SetTrimming(gd::StringTrimmingEllipsisCharacter);
 for (int vi = 0; vi < n; ++vi) {
 int row = scroll_ + vi;
 const ClipEntry& e = items_[rows_[row]];
-float y = (gd::REAL)(kHeaderH + vi * kRowH);
+float y = (gd::REAL)(kBodyY + vi * kRowH);
 // 行底：选中 > 悬停 > 无（三者互斥，避免叠加出脏色）
 // 玻璃卡片（方案 B）：每条独立圆角卡面，选中/悬停浮现极光描边
 float cx0 = 10.f, cy0 = y + 4.f, cw = (gd::REAL)(w - 20), ch = (gd::REAL)kRowH - 10.f;
@@ -701,6 +959,7 @@ if (!e.source.empty()) meta += L" · " + e.source;
 meta += L" · " + TypeTag(EffType(e)) + L" · " + SizeStr(e);
 if (e.type == "image" && e.imgW > 0)
 meta += L" · " + std::to_wstring(e.imgW) + L"×" + std::to_wstring(e.imgH);
+if (e.type == "image" && HasOcr(e)) meta += L" · 含文字";
 gd::SolidBrush mcol(kTextMeta);
 // 元信息 14px 行 + 预览 2 行 34px = 48px，整体在行内垂直居中
 bool hasPreview = (e.type != "image");
@@ -738,6 +997,16 @@ gd::RectF(tx, textTop + metaH + 4.f, tw, prevH), &trim, &pcol);  // 两行预览
 }
 }
             // 右：�?/ 删（MDL2 图标；点击行本体即复制，无独立复制按钮）
+if (isImgRow && [&] { for (auto& p : e.payloads) if (p.fmt == "ocr") return true; return false; }()) {
+    // 认字按钮：把 OCR 文字复制回剪贴板
+    RECT orc = OcrRect((int)y);
+    gd::RectF orcrc((gd::REAL)orc.left, (gd::REAL)orc.top,
+                    (gd::REAL)(orc.right - orc.left), (gd::REAL)(orc.bottom - orc.top));
+    gd::Pen obp(kLine, 1.f);
+    g.DrawRectangle(&obp, orcrc);
+    gd::SolidBrush otc(kTextMeta);
+    g.DrawString(L"字", -1, &fMeta, orcrc, &sf, &otc);
+}
 auto drawBtn = [&](const RECT& rcIn, const wchar_t* glyph, bool active) {
 gd::RectF rc((gd::REAL)rcIn.left, (gd::REAL)rcIn.top,
 (gd::REAL)(rcIn.right - rcIn.left),
@@ -761,8 +1030,8 @@ drawBtn(DelRect((int)y), L"\uE74D", false);     // 垃圾?
 
         // ---- 滚动条指示（滚动时显示，停止�?0.8s 后淡出） ----
 if ((int)rows_.size() > vis && scrollAlpha_ > 0.f) {
-float trackY0 = (gd::REAL)(kHeaderH + 4);
-float trackH = (gd::REAL)(h - kHeaderH - 10);
+float trackY0 = (gd::REAL)(kBodyY + 4);
+float trackH = (gd::REAL)(h - kBodyY - 10);
 float thumbH = std::max(20.f, trackH * vis / rows_.size());
 float t = rows_.size() > vis
                           ? (float)scroll_ / (float)(rows_.size() - vis)
@@ -982,7 +1251,7 @@ GetWindowRect(hwnd_, &pr);
 HMONITOR mon = MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST);
 MONITORINFO mi{sizeof(mi)};
 if (!GetMonitorInfoW(mon, &mi)) return;
-int rowY = pr.top + (int)((kHeaderH + (row - scroll_) * kRowH) * scale_);
+int rowY = pr.top + (int)((kBodyY + (row - scroll_) * kRowH) * scale_);
 int pwPhys = (int)(pw_ * scale_), phPhys = (int)(ph_ * scale_);
 int x = pr.right + (int)(8 * scale_);
 if (x + pwPhys > mi.rcWork.right - 8) x = pr.left - pwPhys - (int)(8 * scale_);
@@ -1239,8 +1508,22 @@ case WM_ERASEBKGND:
 return 1;
 case WM_KEYDOWN:
 if (wp == VK_ESCAPE) {
+if (!self->query_.empty()) {  // 先清搜索，再关面板
+self->query_.clear();
+self->sel_ = 0;
+self->scroll_ = 0;
+self->Refresh();
+} else {
 self->clearArm_ = false;
 self->OnClose();
+}
+} else if (wp == VK_BACK) {
+if (!self->query_.empty()) {
+self->query_.pop_back();
+self->sel_ = 0;
+self->scroll_ = 0;
+self->Refresh();
+}
 } else if (wp == VK_RETURN) {
 self->CopyRow(self->sel_);
 } else if (wp == VK_UP) {
@@ -1263,9 +1546,29 @@ self->scroll_ = 0;
 self->Refresh();
 }
 return 0;
+case WM_CHAR:
+if (wp >= 32 && wp != 127) {  // 可打印字符进搜索框（面板聚焦时直接打字）
+self->query_ += (wchar_t)wp;
+self->sel_ = 0;
+self->scroll_ = 0;
+self->Refresh();
+}
+return 0;
 case WM_MOUSEMOVE: {
 float s = self->scale_ ? self->scale_ : 1.f;
 int x = (int)(GET_X_LPARAM(lp) / s), y = (int)(GET_Y_LPARAM(lp) / s);
+if (self->pressRow_ >= 0) {  // 图片行按住移动超阈值 → 拖出到外部应用
+POINT cur;
+GetCursorPos(&cur);
+if (abs(cur.x - self->pressPt_.x) + abs(cur.y - self->pressPt_.y) > 6) {
+int r = self->pressRow_;
+self->pressRow_ = -1;
+self->dragging_ = true;
+self->StartImageDrag(r);
+self->dragging_ = false;
+return 0;
+}
+}
 if (!self->trackMouse_) {  // 登记离开跟踪（一次性，离开后需重登记）
 TRACKMOUSEEVENT tme{sizeof(tme), TME_LEAVE, hwnd, 0};
 TrackMouseEvent(&tme);
@@ -1284,6 +1587,7 @@ return 0;
 }
 case WM_MOUSELEAVE:
 self->trackMouse_ = false;
+self->pressRow_ = -1;
 self->hoverRow_ = -1;
 self->closeHot_ = false;
 KillTimer(hwnd, 1);
@@ -1343,6 +1647,10 @@ self->OnClose();
 return 0;
 }
 int hit = self->HitRow(x, y);
+if (hit >= 6000) {  // 认字复制
+self->CopyOcrRow(hit - 6000);
+return 0;
+}
 if (hit >= 4000 && hit < 5000) {  // 置顶切换
 int row = hit - 4000;
 if (self->store_ && row < (int)self->rows_.size()) {
@@ -1360,12 +1668,27 @@ self->Refresh();
 }
 return 0;
 }
-if (hit >= 0) {  // 点击行本体：直接复制并关闭面?
+if (hit >= 0 && hit < 3000) {  // 行本体：图片按下待拖/松手复制；其余直接复制
+const ClipEntry& e = self->items_[self->rows_[hit]];
 self->sel_ = hit;
+if (self->EffType(e) == "image") {
+self->pressRow_ = hit;
+GetCursorPos(&self->pressPt_);
+self->Draw();
+} else {
 self->CopyRow(hit);
+}
 }
 return 0;
 }
+case WM_LBUTTONUP:
+if (self->pressRow_ >= 0) {
+int r = self->pressRow_;
+self->pressRow_ = -1;
+if (!self->dragging_) self->CopyRow(r);
+self->dragging_ = false;
+}
+return 0;
 case WM_LBUTTONDBLCLK: {
 float s = self->scale_ ? self->scale_ : 1.f;
 int x = (int)(GET_X_LPARAM(lp) / s), y = (int)(GET_Y_LPARAM(lp) / s);

@@ -45,6 +45,9 @@ public:
     void SetPaused(bool p) { paused_ = p; }
     bool Paused() const { return paused_; }
 
+    // 设置面板改参数后即时生效（UI 线程调用；worker 只读对齐的 int/bool，无撕裂）
+    void SetOpts(const ClipboardOpts& o) { opts_ = o; }
+
     // 主窗口被重建（Explorer 重启恢复）后更新通知目标句柄
     void SetNotifyWindow(HWND h) { notify_ = h; }
 

@@ -73,8 +73,25 @@ void Spotlight::OnClose() {
 
 void Spotlight::Refresh() {
     hits_.clear();
-    // 只搜「容器内文件」：不返回应用/开始菜单等容器之外的内容
-    for (auto& f : SearchFiles(files_, query_)) hits_.push_back(f);
+    kinds_.clear();
+    auto add = [&](const std::vector<AppItem>& v, int kind) {
+        for (auto& it : v) {
+            if ((int)hits_.size() >= kMaxRows) return;
+            hits_.push_back(it);
+            kinds_.push_back(kind);
+        }
+    };
+    if (query_.empty()) {
+        // 空查询：今日待办 + 最近剪贴板 + 容器文件（不铺应用列表）
+        if (todoFn_) add(todoFn_(), 2);
+        if (clipFn_) add(clipFn_(), 1);
+        add(SearchFiles(files_, query_), 0);
+    } else {
+        add(SearchFiles(files_, query_), 0);
+        if (apps_) add(apps_->Search(query_), 0);
+        if (clipFn_) add(SearchItems(clipFn_(), query_), 1);
+        if (todoFn_) add(SearchItems(todoFn_(), query_), 2);
+    }
     if (sel_ >= (int)hits_.size()) sel_ = (int)hits_.size() - 1;
     if (sel_ < 0) sel_ = 0;
     Draw();
@@ -121,9 +138,18 @@ void Spotlight::Draw() {
         path.AddArc(w - r - 0.5f, h - r - 0.5f, r, r, 0, 90);
         path.AddArc(0.5f, h - r - 0.5f, r, r, 90, 90);
         path.CloseFigure();
-        Gdiplus::SolidBrush bg(Gdiplus::Color(235, 11, 14, 20));  // 近不透明，文字清晰
+        Gdiplus::SolidBrush bg(Gdiplus::Color(205, 11, 14, 20));  // 烟熏玻璃（与剪贴板面板同）
         g.FillPath(&bg, &path);
-        Gdiplus::Pen stroke(Gdiplus::Color(70, 34, 211, 238), 1.f);
+        Gdiplus::LinearGradientBrush aurora(Gdiplus::PointF(0, 0),
+                                            Gdiplus::PointF((Gdiplus::REAL)w, (Gdiplus::REAL)h),
+                                            Gdiplus::Color(0, 0, 0, 0),
+                                            Gdiplus::Color(0, 0, 0, 0));
+        Gdiplus::Color acols[3] = {Gdiplus::Color(120, 34, 211, 238),
+                                   Gdiplus::Color(120, 129, 140, 248),
+                                   Gdiplus::Color(120, 192, 132, 252)};
+        Gdiplus::REAL apos[3] = {0.f, 0.5f, 1.f};
+        aurora.SetInterpolationColors(acols, apos, 3);
+        Gdiplus::Pen stroke(&aurora, 1.2f);
         g.DrawPath(&stroke, &path);
 
         // 查询行
@@ -176,6 +202,9 @@ void Spotlight::Draw() {
                     &hl, Gdiplus::RectF(8.f, y, (Gdiplus::REAL)(w - 16), (Gdiplus::REAL)kRowH - 4));
             }
             std::wstring name = hits_[i].name;
+            int kind = i < (int)kinds_.size() ? kinds_[i] : 0;
+            if (kind == 1) name = L"〔历史〕" + name;
+            else if (kind == 2) name = L"〔待办〕" + name;
             if ((int)name.size() > 34) name = name.substr(0, 34) + L"…";
             Gdiplus::SolidBrush rowcol(i == sel_ ? Gdiplus::Color(255, 255, 255)
                                                  : Gdiplus::Color(210, 214, 222));
@@ -226,8 +255,15 @@ void Spotlight::MoveToTop() {
 
 void Spotlight::Launch(int i) {
     if (i < 0 || i >= (int)hits_.size()) return;
-    ShellExecuteW(nullptr, L"open", hits_[i].path.c_str(), nullptr, nullptr,
-                  SW_SHOWNORMAL);
+    int kind = i < (int)kinds_.size() ? kinds_[i] : 0;
+    if (kind == 1) {
+        if (onClip_) onClip_(hits_[i].path);
+    } else if (kind == 2) {
+        if (onTodo_) onTodo_();
+    } else {
+        ShellExecuteW(nullptr, L"open", hits_[i].path.c_str(), nullptr, nullptr,
+                      SW_SHOWNORMAL);
+    }
     OnClose();
 }
 

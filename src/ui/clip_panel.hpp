@@ -40,7 +40,11 @@ private:
     void ClearThumbs();
     void* GetThumb(const ClipEntry& e);  // GDI+ Bitmap*（会话内缓存）
     bool CopyRow(int row);
+    bool HasOcr(const ClipEntry& e) const;   // 条目带 OCR 认字载荷
+    void CopyOcrRow(int row);                // 复制认字文字（走回写抑制）
+    void StartImageDrag(int row);            // 图片行拖出到外部应用（OLE）
     std::vector<int> VisibleRows() const;  // 过滤后的 items_ 下标
+    bool MatchQuery(const ClipEntry& e) const;  // 搜索框命中（文本/来源/认字/文件名）
     int VisibleCount() const;              // 当前窗口高度下可见行数
     std::vector<std::wstring> DropPaths(const ClipEntry& e) const;  // HDROP 载荷路径（缓存）
     void* GetFileThumb(const std::wstring& path);  // 原图片文件直接出缩略图（缓存）
@@ -68,6 +72,8 @@ private:
     int HitRow(int x, int y) const;
 
     static constexpr int kW = 560, kHeaderH = 48, kRowH = 68;
+    static constexpr int kSearchH = 36;              // 搜索条带高
+    static constexpr int kBodyY = kHeaderH + kSearchH;  // 行区起点
     float scale_ = 1.f;
     HWND hwnd_ = nullptr;
     bool created_ = false;
@@ -79,9 +85,13 @@ private:
     std::vector<ClipEntry> items_;   // store 快照
     std::vector<int> rows_;          // 过滤后的 items_ 下标（新→旧）
     int filter_ = 0;                 // 0=全部 1=文本 2=图片 3=文件
+    std::wstring query_;             // 搜索框内容（空=不过滤）
     int sel_ = 0;
     int scroll_ = 0;                 // 首个可见行下标
     bool clearArm_ = false;          // 清空二次确认臂
+    int pressRow_ = -1;              // 图片行按下待拖/待复制
+    POINT pressPt_{};
+    bool dragging_ = false;
     bool closeHot_ = false;          // 关闭按钮悬停态
     int winH_ = 0;                   // 当前逻辑高度
     std::map<std::string, void*> thumbs_;  // id / "f:"+path → Gdiplus::Bitmap*

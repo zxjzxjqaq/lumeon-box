@@ -34,7 +34,7 @@ void RulesDialog::Toggle(RuleSet& rules, const std::wstring& rulesFile) {
     wc.lpfnWndProc = &WndProc;
     wc.hInstance = GetModuleHandleW(nullptr);
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    wc.hbrBackground = CreateSolidBrush(RGB(18, 20, 28));
+    wc.hbrBackground = CreateSolidBrush(RGB(15, 23, 42));  // slate-900：与烟熏玻璃面板同色系
     wc.lpszClassName = L"LumenBoxRules";
     RegisterClassW(&wc);
     hwnd_ = CreateWindowExW(WS_EX_TOOLWINDOW, wc.lpszClassName, L"LumenBox 分类规则",
@@ -143,6 +143,17 @@ LRESULT CALLBACK RulesDialog::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         }
         }
         return 0;
+    }
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLORBTN:
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORLISTBOX:
+    case WM_CTLCOLORDLG: {  // 子控件统一 slate-900 底 + slate-100 字
+        static HBRUSH bg = CreateSolidBrush(RGB(15, 23, 42));
+        HDC dc = (HDC)wp;
+        SetTextColor(dc, RGB(235, 238, 245));
+        SetBkColor(dc, RGB(15, 23, 42));
+        return (LRESULT)bg;
     }
     case WM_CLOSE:
         DestroyWindow(hwnd);

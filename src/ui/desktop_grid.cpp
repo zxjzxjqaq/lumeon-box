@@ -177,6 +177,18 @@ void DesktopGrid::Relayout() {
     if (on_extent_) on_extent_(maxx - minx, maxy - miny);
 }
 
+// 盒子强调色板（与设置/右键菜单索引一致）：青/靛/紫/琥珀/翠/玫瑰
+static D2D1_COLOR_F BoxAccent(int c) {
+    switch (c) {
+    case 1: return {0.506f, 0.549f, 0.973f, 0.9f};
+    case 2: return {0.753f, 0.518f, 0.988f, 0.9f};
+    case 3: return {0.961f, 0.620f, 0.043f, 0.9f};
+    case 4: return {0.067f, 0.722f, 0.506f, 0.9f};
+    case 5: return {0.945f, 0.353f, 0.447f, 0.9f};
+    default: return {0.133f, 0.827f, 0.933f, 0.9f};
+    }
+}
+
 void DesktopGrid::SetBoxes(const std::vector<BoxDef>& defs) {
     // 复用已有视觉；比旧清单多的则新建，少的则移除
     while (boxes_.size() > defs.size()) {
@@ -198,6 +210,8 @@ void DesktopGrid::SetBoxes(const std::vector<BoxDef>& defs) {
         b.folder = defs[i].folder;
         b.isTasks = defs[i].type == "tasks";
         b.collapsed = defs[i].collapsed;
+        b.sort = defs[i].sort;
+        b.color = defs[i].color;
         b.scroll = 0;
     }
     Relayout();
@@ -213,6 +227,8 @@ std::vector<BoxDef> DesktopGrid::BoxesOut() const {
         d.folder = b.folder;
         d.type = b.isTasks ? "tasks" : "data";
         d.collapsed = b.collapsed;
+        d.sort = b.sort;
+        d.color = b.color;
         out.push_back(std::move(d));
     }
     return out;
@@ -227,6 +243,8 @@ BoxDef DesktopGrid::BoxDefAt(int i) const {
         d.folder = b.folder;
         d.type = b.isTasks ? "tasks" : "data";
         d.collapsed = b.collapsed;
+        d.sort = b.sort;
+        d.color = b.color;
     }
     return d;
 }
@@ -351,11 +369,16 @@ void DesktopGrid::RedrawBox(int i) {
         ctx->DrawText(count.c_str(), (UINT32)count.size(), headerFmt_.Get(),
                       {w - 34.f, 6.f, w - 10.f, kHeaderH}, dim.Get());
         ctx->DrawLine({10.f, kHeaderH}, {w - 10.f, kHeaderH}, line.Get(), 0.8f);
+        {  // 左缘强调色条：盒子配色一眼可辨
+            ComPtr<::ID2D1SolidColorBrush> ab;
+            ctx->CreateSolidColorBrush(BoxAccent(b.color), ab.GetAddressOf());
+            ctx->FillRectangle(D2D1::RectF(0.f, 6.f, 3.f, kHeaderH - 6.f), ab.Get());
+        }
 
         // 行：图标 + 文件名（悬停/拖入走极光渐变描边整卡）
         if (active) {
             D2D1_GRADIENT_STOP gs[3] = {
-                {0.0f, D2D1_COLOR_F{0.133f, 0.827f, 0.933f, 0.9f}},
+                {0.0f, BoxAccent(b.color)},
                 {0.5f, D2D1_COLOR_F{0.506f, 0.549f, 0.973f, 0.9f}},
                 {1.0f, D2D1_COLOR_F{0.753f, 0.518f, 0.988f, 0.9f}},
             };
@@ -411,7 +434,7 @@ void DesktopGrid::DrawTasksBox(::ID2D1DeviceContext* ctx, int ti, float w, float
     ctx->CreateSolidColorBrush(D2D1_COLOR_F{1.f, 1.f, 1.f, 0.92f}, text.GetAddressOf());
     ctx->CreateSolidColorBrush(D2D1_COLOR_F{1.f, 1.f, 1.f, 0.55f}, dim.GetAddressOf());
     ctx->CreateSolidColorBrush(D2D1_COLOR_F{1.f, 1.f, 1.f, 0.25f}, hl.GetAddressOf());
-    ctx->CreateSolidColorBrush(D2D1_COLOR_F{0.133f, 0.827f, 0.933f, 0.85f}, accent.GetAddressOf());
+    ctx->CreateSolidColorBrush(BoxAccent(boxes_[ti].color), accent.GetAddressOf());
     ctx->CreateSolidColorBrush(D2D1_COLOR_F{1.f, 1.f, 1.f, 0.92f}, white.GetAddressOf());
 
     float dy = kHeaderH;  // 日期条顶
@@ -534,7 +557,31 @@ void DesktopGrid::Refresh() {
             continue;
         }
         b.files = org_->FilesInFolder(b.folder);
-        std::sort(b.files.begin(), b.files.end(), DisplayFileLess);
+        if (b.sort == 1) {  // 时间：最近修改在前
+            std::sort(b.files.begin(), b.files.end(),
+                      [](const std::wstring& a, const std::wstring& b2) {
+                          std::error_code e1, e2;
+                          auto ta = std::filesystem::last_write_time(a, e1);
+                          auto tb = std::filesystem::last_write_time(b2, e2);
+                          if (e1 || e2) return DisplayFileLess(a, b2);
+                          return ta > tb;
+                      });
+        } else if (b.sort == 2) {  // 类型：扩展名分组，组内按名
+            std::sort(b.files.begin(), b.files.end(),
+                      [](const std::wstring& a, const std::wstring& b2) {
+                          auto ext = [](const std::wstring& p) {
+                              size_t d = p.find_last_of(L'.');
+                              std::wstring e = d == std::wstring::npos ? L"" : p.substr(d + 1);
+                              for (auto& c : e) c = (wchar_t)towlower(c);
+                              return e;
+                          };
+                          std::wstring ea = ext(a), eb = ext(b2);
+                          if (ea != eb) return ea < eb;
+                          return DisplayFileLess(a, b2);
+                      });
+        } else {
+            std::sort(b.files.begin(), b.files.end(), DisplayFileLess);
+        }
         ClampScroll(b);
     }
     Relayout();
@@ -951,6 +998,20 @@ void DesktopGrid::HeaderMenu(HWND hwnd, int boxIdx) {
     AppendMenuW(m, MF_STRING, 2, L"清空此格（放回桌面）");
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(m, MF_STRING | (tasks ? MF_DISABLED : 0), 3, L"删除此容器…");
+    if (!tasks) {
+        HMENU sm = CreatePopupMenu();
+        AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(sm, MF_STRING | (boxes_[boxIdx].sort == 0 ? MF_CHECKED : 0), 10, L"按名称");
+        AppendMenuW(sm, MF_STRING | (boxes_[boxIdx].sort == 1 ? MF_CHECKED : 0), 11, L"按时间");
+        AppendMenuW(sm, MF_STRING | (boxes_[boxIdx].sort == 2 ? MF_CHECKED : 0), 12, L"按类型");
+        AppendMenuW(m, MF_POPUP, (UINT_PTR)sm, L"排序");
+        HMENU cm = CreatePopupMenu();
+        const wchar_t* cn[6] = {L"青", L"靛", L"紫", L"琥珀", L"翠", L"玫瑰"};
+        for (int c = 0; c < 6; ++c)
+            AppendMenuW(cm, MF_STRING | (boxes_[boxIdx].color == c ? MF_CHECKED : 0),
+                        20 + c, cn[c]);
+        AppendMenuW(m, MF_POPUP, (UINT_PTR)cm, L"强调色");
+    }
     POINT pt;
     GetCursorPos(&pt);
     SetForegroundWindow(hwnd);
@@ -958,6 +1019,18 @@ void DesktopGrid::HeaderMenu(HWND hwnd, int boxIdx) {
                              pt.x, pt.y, 0, hwnd, nullptr);
     DestroyMenu(m);
     switch (cmd) {
+    case 10:
+    case 11:
+    case 12:
+        boxes_[boxIdx].sort = cmd - 10;
+        if (on_boxes_changed_) on_boxes_changed_();
+        Refresh();
+        break;
+    case 20: case 21: case 22: case 23: case 24: case 25:
+        boxes_[boxIdx].color = cmd - 20;
+        if (on_boxes_changed_) on_boxes_changed_();
+        RedrawBox(boxIdx);
+        break;
     case 1:
         StartRename(boxIdx);  // 就地编辑格名（不再弹窗）
         break;

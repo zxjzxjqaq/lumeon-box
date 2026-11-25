@@ -1,15 +1,18 @@
 #include <windows.h>
 #include <algorithm>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <knownfolders.h>
 #include <shlobj.h>
+#include <nlohmann/json.hpp>
 #include "anim/spring_demo.hpp"  // M0 演示保留编译；主流程不再使用
 #include "core/appindex.hpp"
 #include "core/autostart.hpp"
 #include "core/clipboard_monitor.hpp"
 #include "core/clipboard_store.hpp"
 #include "core/config.hpp"
+#include "core/hotkey.hpp"
 #include "core/organizer.hpp"
 #include "core/rules.hpp"
 #include "core/stage_log.hpp"
@@ -23,6 +26,7 @@
 #include "ui/drop_target.hpp"
 #include "ui/glass_window.hpp"
 #include "ui/hint.hpp"
+#include "ui/settings_panel.hpp"
 #include "ui/spotlight.hpp"
 #include "ui/tray.hpp"
 
@@ -47,6 +51,7 @@ struct HostCtx {
     HWND container = nullptr;
     bool* quitRequested = nullptr;
     bool independent = false;                   // 独立模式：不检查父宿主
+    std::function<void()>* todoTick = nullptr;  // 待办提醒分钟检查（timer 6）
 };
 
 static LRESULT CALLBACK HostProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
@@ -59,6 +64,10 @@ static LRESULT CALLBACK HostProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     if (!c) return DefWindowProcW(h, msg, wp, lp);
     if (msg == c->taskbarCreated && c->taskbarCreated) {
         if (c->resync && *c->resync) (*c->resync)();
+        return 0;
+    }
+    if (msg == WM_TIMER && wp == 6) {  // 待办到期提醒：分钟级检查
+        if (c->todoTick && *c->todoTick) (*c->todoTick)();
         return 0;
     }
     if (msg == WM_TIMER && wp == 9) {
@@ -130,6 +139,7 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
     DesktopGrid grid;
     TrayIcon tray;
     Autostart autostart;
+    SettingsPanel settings;
     HintToast hint;
     Watcher watcher;
     Watcher boxWatcher;                        // 监视容器根（递归）→ 外部改动/还原时刷新容器
@@ -160,6 +170,32 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
                  !ec && it != end; it.increment(ec))
                 out.push_back(it->path().wstring());
         }
+        // v1.1.0：可选纳入桌面 + 文档（按需扫描、60s 缓存、深度 2、上限 4000；不建全盘索引）
+        if (cfg.searchFolders) {
+            static std::vector<std::wstring> cache;
+            static ULONGLONG cacheMs = 0;
+            ULONGLONG now = GetTickCount64();
+            if (cache.empty() || now - cacheMs > 60000) {
+                cache.clear();
+                cacheMs = now;
+                for (const auto& root : {KnownPath(FOLDERID_Desktop),
+                                         KnownPath(FOLDERID_Documents)}) {
+                    std::function<void(const fs::path&, int)> walk =
+                        [&](const fs::path& p, int depth) {
+                            if (depth > 2 || cache.size() >= 4000) return;
+                            std::error_code e2;
+                            for (fs::directory_iterator it(p, fs::directory_options::skip_permission_denied, e2), end;
+                                 !e2 && it != end; it.increment(e2)) {
+                                if (cache.size() >= 4000) return;
+                                cache.push_back(it->path().wstring());
+                                if (it->is_directory(e2)) walk(it->path(), depth + 1);
+                            }
+                        };
+                    walk(fs::path(root), 0);
+                }
+            }
+            out.insert(out.end(), cache.begin(), cache.end());
+        }
         return out;
     });
 
@@ -173,7 +209,7 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
     ClipboardMonitor clipMon;
     ClipPanel clipPanel;
     clipPanel.SetStore(&clipStore);
-    clipPanel.SetCopyFn([&](const ClipEntry& e) {
+    auto copyClipEntry = [&](const ClipEntry& e) {
         return CopyClipToClipboard(
             win.hwnd(), e,
             [&](const std::string& fmt, std::string& bytes) {
@@ -184,7 +220,8 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
                     if (p.fmt == "png" && !p.file.empty())
                         out.push_back(clipStore.BlobPath(e, p));
             });
-    });
+    };
+    clipPanel.SetCopyFn(copyClipEntry);
     clipPanel.SetPausedApi(
         [&] { return cfg.clipboardPaused; },
         [&](bool p) {
@@ -193,10 +230,118 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
             store.save(cfg);
         });
 
+    // 呼出热键：配置字符串真正生效（解析失败/冲突回退 Ctrl+B）
+    auto registerClipHotkey = [&]() -> bool {
+        UnregisterHotKey(win.hwnd(), 5);
+        UINT mods = 0, vk = 0;
+        if (!ParseHotkey(cfg.clipboardHotkey, mods, vk)) {
+            mods = MOD_CONTROL;
+            vk = 'B';
+        }
+        if (RegisterHotKey(win.hwnd(), 5, mods | MOD_NOREPEAT, vk)) return true;
+        return RegisterHotKey(win.hwnd(), 5, MOD_CONTROL | MOD_NOREPEAT, 'B') != FALSE;
+    };
+    std::string hideModeAtStart = cfg.hideIconsMode;
+    // 设置面板改动 → 即时生效（监听参数/暂停态/热键）；隐藏图标模式需重启
+    auto applySettings = [&] {
+        ClipboardOpts o;
+        o.maxEntries = cfg.clipboardMaxEntries;
+        o.blobMaxMB = static_cast<uint64_t>(cfg.clipboardBlobMB);
+        o.recordSource = cfg.clipboardRecordSource;
+        clipMon.SetOpts(o);
+        clipMon.SetPaused(cfg.clipboardPaused);
+        registerClipHotkey();
+        if (cfg.hideIconsMode != hideModeAtStart) {
+            tray.Balloon(L"隐藏图标模式", L"已保存，重启软件后生效。");
+            hideModeAtStart = cfg.hideIconsMode;
+        }
+    };
+    settings.SetApi(&cfg, &store, [&] { return autostart.IsEnabled(); },
+                    [&](bool v) { v ? autostart.Enable() : autostart.Disable(); },
+                    applySettings);
+    // 待办到期提醒：当天到点（或之后首次检查）气泡一次，同日不重复
+    auto checkTodoReminder = [&](bool startup) {
+        if (!cfg.todoReminder) return;
+        SYSTEMTIME st{};
+        GetLocalTime(&st);
+        char today[16];
+        sprintf_s(today, "%04d-%02d-%02d", st.wYear, st.wMonth, st.wDay);
+        if (cfg.todoRemindLast == today) return;
+        if (!startup && st.wHour < cfg.todoReminderHour) return;
+        int n = 0;
+        try {
+            std::ifstream f(appData + L"\\tasks.json", std::ios::binary);
+            if (f.good()) {
+                auto j = nlohmann::json::parse(f, nullptr, false);
+                if (!j.is_discarded() && j.contains("tasks") && j["tasks"].contains(today))
+                    for (auto& t : j["tasks"][today])
+                        if (!t.value("done", false)) ++n;
+            }
+        } catch (...) {
+        }
+        if (n <= 0) return;
+        tray.Balloon(L"待办提醒",
+                     (L"今天有 " + std::to_wstring(n) + L" 条待办到期，打开待办盒看看。").c_str());
+        cfg.todoRemindLast = today;
+        store.save(cfg);
+    };
+    std::function<void()> todoTick = [&] { checkTodoReminder(false); };
+
     auto toggleVisible = [&] {
         visible = !visible;
         ShowWindow(win.hwnd(), visible ? SW_SHOW : SW_HIDE);
     };
+
+    // 聚光灯扩范围：剪贴板历史 / 今日待办 进搜索结果
+    spot.SetClipFn([&]() -> std::vector<AppItem> {
+        std::vector<AppItem> out;
+        for (auto& e : clipStore.Snapshot()) {
+            if (out.size() >= 30) break;
+            AppItem it;
+            it.path = ToWide(e.id);
+            std::wstring t = e.text;
+            size_t nl = t.find(L'\n');
+            if (nl != std::wstring::npos) t = t.substr(0, nl);
+            if (t.empty()) t = e.type == "image" ? L"[图片]" : L"[条目]";
+            it.name = t;
+            out.push_back(std::move(it));
+        }
+        return out;
+    });
+    spot.SetTodoFn([&]() -> std::vector<AppItem> {
+        std::vector<AppItem> out;
+        SYSTEMTIME st{};
+        GetLocalTime(&st);
+        char key[16];
+        sprintf_s(key, "%04d-%02d-%02d", st.wYear, st.wMonth, st.wDay);
+        try {
+            std::ifstream f(appData + L"\\tasks.json", std::ios::binary);
+            if (!f.good()) return out;
+            auto j = nlohmann::json::parse(f, nullptr, false);
+            if (j.is_discarded() || !j.contains("tasks") || !j["tasks"].contains(key))
+                return out;
+            for (auto& t : j["tasks"][key]) {
+                if (t.value("done", false)) continue;
+                AppItem it;
+                it.name = ToWide(t.value("text", std::string()));
+                it.path = ToWide(std::string(key));
+                out.push_back(std::move(it));
+                if (out.size() >= 9) break;
+            }
+        } catch (...) {
+        }
+        return out;
+    });
+    spot.SetOnClipLaunch([&](const std::wstring& id) {
+        for (auto& e : clipStore.Snapshot())
+            if (e.id == ToUtf8(id)) {
+                copyClipEntry(e);
+                break;
+            }
+    });
+    spot.SetOnTodoLaunch([&] {
+        if (!visible) toggleVisible();
+    });
 
     auto on_key = [&](UINT id) {
         if (id == 1) {  // Ctrl+Alt+1：贴桌 ↔ 独立（失败转置底）
@@ -246,13 +391,9 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
             clipMon.SetPaused(cfg.clipboardPaused);
         else
             StageTrace("clipmon-start-FAILED");
-        if (!RegisterHotKey(win.hwnd(), 5, MOD_CONTROL | MOD_NOREPEAT, 'B')) {
-            if (RegisterHotKey(win.hwnd(), 5, MOD_CONTROL | MOD_ALT, 'B'))
-                StageTrace("hotkey-ctrl-b-FAILED-fallback-ctrl-alt-b");
-            else {
-                StageTrace("hotkey-clip-register-FAILED");
-                clipHotkeyFailed = true;
-            }
+        if (!registerClipHotkey()) {
+            StageTrace("hotkey-clip-register-FAILED");
+            clipHotkeyFailed = true;
         }
     }
     // 双击隐藏图标：默认钩子（D6），失败或热键模式走 Ctrl+Alt+H
@@ -438,6 +579,7 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
     hostCtx.taskbarCreated = wmTaskbarCreated;
     hostCtx.container = win.hwnd();
     hostCtx.quitRequested = &quitRequested;
+    hostCtx.todoTick = &todoTick;
     HWND hostWnd = CreateWindowExW(0, L"LumenBoxHost", L"LumenBoxHost", 0, 0, 0, 0, 0,
                                    HWND_MESSAGE, nullptr, hInst, &hostCtx);
     if (!hostWnd) {
@@ -445,7 +587,9 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
     } else {
         StageTrace("hostwnd-ready");
         SetTimer(hostWnd, 9, 1500, nullptr);  // 健康检查（挂常驻窗口，容器死也照跑）
+        SetTimer(hostWnd, 6, 60000, nullptr);  // 待办提醒分钟检查
     }
+    checkTodoReminder(true);  // 启动时补一次（当天到点后才提醒）
 
     // Explorer 重启恢复（见 HostProc 说明）：重建主窗口 + 重挂全部窗口级资源
     resyncShell = [&] {
@@ -473,9 +617,7 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
             StageTrace("r:hook-reinstall-FAILED");
         RegisterHotKey(h, 1, MOD_CONTROL | MOD_ALT, '1');
         RegisterHotKey(h, 4, MOD_CONTROL | MOD_NOREPEAT, VK_SPACE);
-        if (cfg.clipboardEnabled &&
-            !RegisterHotKey(h, 5, MOD_CONTROL | MOD_NOREPEAT, 'B'))
-            RegisterHotKey(h, 5, MOD_CONTROL | MOD_ALT, 'B');
+        if (cfg.clipboardEnabled) registerClipHotkey();
         if (cfg.hideIconsMode != "hook") RegisterHotKey(h, 3, MOD_CONTROL | MOD_ALT, 'H');
         clipMon.SetNotifyWindow(h);
         // boxWatcher 原指向已销毁的旧窗口：重启监听挂到新 HWND，
@@ -562,6 +704,7 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
                             L"暂停记录剪贴板");
                 AppendMenuW(m, MF_STRING, 12, L"清空剪贴板历史");
                 AppendMenuW(m, MF_STRING, 8, L"新建容器…");
+                AppendMenuW(m, MF_STRING, 13, L"设置…");
                 AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
                 AppendMenuW(m, MF_STRING | (autostart.IsEnabled() ? MF_CHECKED : 0u), 4,
                             L"开机自启");
@@ -596,6 +739,7 @@ static int Run(HINSTANCE hInst, const wchar_t* cmd) {
                     if (bi >= 0) grid.BeginRename(bi);
                     break;
                 }
+                case 13: settings.Toggle(); break;
                 case 9:
                     win.SetQuitOnDestroy(true);  // 用户主动退出：WM_DESTROY 才真正结束循环
                     DestroyWindow(win.hwnd());

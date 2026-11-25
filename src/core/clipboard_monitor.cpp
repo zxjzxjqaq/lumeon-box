@@ -1,8 +1,10 @@
 #include "core/clipboard_monitor.hpp"
+#include "core/ocr.hpp"
 #include "core/stage_log.hpp"
 #include "core/strutil.hpp"
 #include <objbase.h>
 #include <objidl.h>
+#include <roapi.h>
 #include <shellapi.h>
 #include <shlobj_core.h>  // DROPFILES（新 SDK 的 shellapi.h 不含此结构）
 #include <wincodec.h>
@@ -799,6 +801,8 @@ void ClipboardMonitor::OnClipboardUpdate() {
 void ClipboardMonitor::WorkerMain() {
     HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     bool com = SUCCEEDED(hr);
+    HRESULT rohr = RoInitialize(RO_INIT_MULTITHREADED);  // WinRT OCR 需要（已 MTA 时返回 S_FALSE）
+    bool ro = SUCCEEDED(rohr);
     for (;;) {
         Job job;
         {
@@ -875,9 +879,33 @@ void ClipboardMonitor::WorkerMain() {
                                      job.entry.payloads.end());
             if (job.entry.payloads.empty()) continue;  // 全部失败 → 丢弃
         }
+        if (!dup && job.entry.type == "image") {
+            // OCR 认字：主图识别文字存 ocr 载荷 → 面板可搜索/可复制文字（纯本地）
+            std::string pngBytes;
+            if (store_->LoadPayload(job.entry, "png", pngBytes) && !pngBytes.empty() &&
+                pngBytes.size() <= (8u << 20)) {
+                std::wstring text = OcrPngBytes(pngBytes);
+                if (!text.empty()) {
+                    ClipPayload op;
+                    op.fmt = "ocr";
+                    op.text = ToUtf8(text);
+                    op.size = op.text.size();
+                    if (op.size > 4096) {
+                        ClipPayload persisted;
+                        persisted.fmt = "ocr";
+                        if (store_->WriteBlob(job.entry, persisted, op.text)) {
+                            op.file = persisted.file;
+                            op.text.clear();
+                        }
+                    }
+                    job.entry.payloads.push_back(std::move(op));
+                }
+            }
+        }
         store_->Prepend(job.entry, opts_.maxEntries, opts_.blobMaxMB << 20);
         PostMessageW(notify_, uiMsg_, 0, 0);  // UI 刷新（面板打开时实时插入）
     }
+    if (ro) RoUninitialize();
     if (com) CoUninitialize();
 }
 

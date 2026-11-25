@@ -13,6 +13,8 @@ struct BoxDef {
     std::wstring folder; // 容器内子目录（data 盒为 box_bN；tasks 盒为空）
     std::string type = "data";  // "tasks" | "data"
     bool collapsed = false;
+    int sort = 0;   // 容器内排序：0=名称 1=时间 2=类型
+    int color = 0;  // 强调色索引（0=青 1=靛 2=紫 3=琥珀 4=翠 5=玫瑰）
 };
 
 struct SpikeConfig {
@@ -33,6 +35,11 @@ struct SpikeConfig {
     int clipboardBlobMB = 64;                // 磁盘 blob 硬顶（MB）
     bool clipboardRecordSource = true;       // 记录来源 exe 名
     bool clipboardPaused = false;            // 暂停记录（托盘/面板共享，持久化）
+    // 设置面板新增（v1.1.0）：搜索范围 / 待办提醒
+    bool searchFolders = true;               // 快速搜索纳入桌面+文档文件夹（按需扫描）
+    bool todoReminder = true;                // 待办到期当天托盘提醒
+    int todoReminderHour = 9;                // 提醒时刻（0–23，当天到点或之后首次检查）
+    std::string todoRemindLast;              // 上次提醒日期 "YYYY-MM-DD"（同日不重复）
 };
 
 // 新装/无 boxes 时的默认两盒：待办 + 默认容器

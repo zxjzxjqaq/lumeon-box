@@ -17,6 +17,11 @@ public:
     bool Visible() const { return created_ && IsWindowVisible(hwnd_); }
     void SetApps(const AppIndex* apps) { apps_ = apps; }
     void SetFilesFn(std::function<std::vector<std::wstring>()> fn) { filesFn_ = std::move(fn); }
+    // v1.1.0 扩范围：剪贴板历史 / 待办（name=预览, path=id 或日期）
+    void SetClipFn(std::function<std::vector<AppItem>()> fn) { clipFn_ = std::move(fn); }
+    void SetTodoFn(std::function<std::vector<AppItem>()> fn) { todoFn_ = std::move(fn); }
+    void SetOnClipLaunch(std::function<void(const std::wstring&)> fn) { onClip_ = std::move(fn); }
+    void SetOnTodoLaunch(std::function<void()> fn) { onTodo_ = std::move(fn); }
 
 private:
     static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
@@ -36,6 +41,10 @@ private:
     std::function<std::vector<std::wstring>()> filesFn_;
     std::vector<std::wstring> files_;
     std::vector<AppItem> hits_;
+    std::vector<int> kinds_;  // 与 hits_ 平行：0=文件/应用 1=剪贴板 2=待办
+    std::function<std::vector<AppItem>()> clipFn_, todoFn_;
+    std::function<void(const std::wstring&)> onClip_;
+    std::function<void()> onTodo_;
     std::wstring query_;
     int sel_ = 0;
     bool caret_on_ = true;  // 光标闪烁（定时器切换）
